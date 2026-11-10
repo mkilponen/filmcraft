@@ -608,6 +608,64 @@ pub fn parse_time_display(input: &str, rate: FrameRate, drop_frame: bool, displa
     })
 }
 
+/// Beats in one bar when a timeline is counted in tempo. The tempo dialog asks only for BPM;
+/// 4/4 is the bar the ruler uses.
+pub const BEATS_PER_BAR: i64 = 4;
+
+/// Slowest and fastest tempo the ruler will count, in beats per minute.
+pub const MIN_TEMPO_BPM: f64 = 1.0;
+pub const MAX_TEMPO_BPM: f64 = 999.0;
+
+/// `bpm` when it is a finite tempo the ruler can count, otherwise why it is not.
+pub fn checked_tempo(bpm: f64) -> Result<f64, String> {
+    if bpm.is_finite() && (MIN_TEMPO_BPM..=MAX_TEMPO_BPM).contains(&bpm) {
+        Ok(bpm)
+    } else {
+        Err(format!("tempo must be a number from {MIN_TEMPO_BPM} to {MAX_TEMPO_BPM} BPM"))
+    }
+}
+
+/// Timeline ticks in one beat at `bpm`. `None` when `bpm` is not a usable tempo.
+pub fn ticks_per_beat(bpm: f64) -> Option<i64> {
+    let bpm = checked_tempo(bpm).ok()?;
+    let ticks = (TICKS_PER_SECOND as f64) * 60.0 / bpm;
+    let rounded = ticks.round();
+    if rounded < 1.0 || rounded > i64::MAX as f64 { None } else { Some(rounded as i64) }
+}
+
+/// Beat index of `tick` at `bpm`, counting from 0 at tick 0. `None` when `bpm` is not usable.
+pub fn beat_at(tick: Tick, bpm: f64) -> Option<i64> {
+    Some(tick.0.div_euclid(ticks_per_beat(bpm)?))
+}
+
+/// How many times a beat is split for the timeline grid: once for 8th notes, again for 16ths.
+pub const SIXTEENTHS_PER_BEAT: i64 = 4;
+
+/// Timeline ticks in one 16th note at `bpm`. A beat and an 8th note fall on the same grid.
+/// `None` when `bpm` is not a usable tempo.
+pub fn ticks_per_sixteenth(bpm: f64) -> Option<i64> {
+    let per = ticks_per_beat(bpm)?;
+    let step = (per as f64 / SIXTEENTHS_PER_BEAT as f64).round();
+    if step < 1.0 || step > i64::MAX as f64 { None } else { Some(step as i64) }
+}
+
+/// Nearest 16th-note boundary at `bpm`. A tie lands on the earlier boundary, as frame snapping does.
+/// `None` when `bpm` is not a usable tempo.
+pub fn snap_sixteenth(tick: Tick, bpm: f64) -> Option<Tick> {
+    let step = ticks_per_sixteenth(bpm)?;
+    let base = tick.0.div_euclid(step).saturating_mul(step);
+    let next = base.saturating_add(step);
+    let earlier = tick.0.saturating_sub(base) <= next.saturating_sub(tick.0);
+    Some(Tick(if earlier { base } else { next }))
+}
+
+/// `bar.beat` for beat index `beat` in 4/4, counting from 1. Beat 0 is `1.1`, beat 4 is `2.1`.
+pub fn beat_label(beat: i64) -> String {
+    let bar = beat.div_euclid(BEATS_PER_BAR) + 1;
+    let in_bar = beat.rem_euclid(BEATS_PER_BAR) + 1;
+    format!("{bar}.{in_bar}")
+}
+
 /// Common audio sample rates offered in sequence settings.
 pub const SAMPLE_RATES: [i64; 6] = [32_000, 44_100, 48_000, 88_200, 96_000, 192_000];
 

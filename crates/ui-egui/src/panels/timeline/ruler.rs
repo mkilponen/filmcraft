@@ -118,19 +118,22 @@ pub(super) fn draw_top(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect, se
         let side = if is_in { "In" } else { "Out" };
         app.auto.add(&format!("timeline.split.{kind}{side}"), Rect::from_center_size(pos2(x, y0 + 3.5), vec2(12.0, 9.0)), &format!("Split {tag} {side}"));
     }
-    let f0 = rate.frame_at(layout.tick_at(ruler.min.x)).max(0);
-    let f1 = rate.frame_at(layout.tick_at(ruler.max.x)) + 1;
-    let mut f = (f0 / minor) * minor;
-    while f <= f1 {
-        let x = layout.x_of(rate.tick_of(f));
-        let major = f % label_step == 0;
-        let h = if major { 10.0 } else { 4.0 };
-        clip.line_segment([pos2(x, tick_base - h), pos2(x, tick_base)], Stroke::new(1.0, t.tl_ruler_tick));
-        if major {
-            let label = format_time(rate.tick_of(f), rate, seq.settings.drop_frame, seq.settings.display, 48000);
-            clip.text(pos2(x + 1.0, label_y), Align2::CENTER_CENTER, label, Tokens::ui(11.0), t.tl_ruler_text);
+    let tempo = seq.settings.tempo_bpm.filter(|bpm| draw_beat_ticks(&clip, layout, t, label_y, tick_base, *bpm));
+    if tempo.is_none() {
+        let f0 = rate.frame_at(layout.tick_at(ruler.min.x)).max(0);
+        let f1 = rate.frame_at(layout.tick_at(ruler.max.x)) + 1;
+        let mut f = (f0 / minor) * minor;
+        while f <= f1 {
+            let x = layout.x_of(rate.tick_of(f));
+            let major = f % label_step == 0;
+            let h = if major { 10.0 } else { 4.0 };
+            clip.line_segment([pos2(x, tick_base - h), pos2(x, tick_base)], Stroke::new(1.0, t.tl_ruler_tick));
+            if major {
+                let label = format_time(rate.tick_of(f), rate, seq.settings.drop_frame, seq.settings.display, 48000);
+                clip.text(pos2(x + 1.0, label_y), Align2::CENTER_CENTER, label, Tokens::ui(11.0), t.tl_ruler_text);
+            }
+            f += minor;
         }
-        f += minor;
     }
     // render bar
     // Per segment (engine `previews`): green = rendered preview, yellow = should play in real time,
@@ -181,7 +184,68 @@ pub(super) fn draw_top(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect, se
     }
     // markers: 8 × 12 pt pentagons in the marker colour, on the top row
     draw_markers(app, ui, &clip, layout, seq);
-    app.auto.add("timeline.ruler", ruler, "time ruler");
+    let ruler_name = match seq.settings.tempo_bpm {
+        Some(bpm) => format!("time ruler, {} BPM", format_bpm(bpm)),
+        None => "time ruler".to_string(),
+    };
+    app.auto.add("timeline.ruler", ruler, &ruler_name);
+}
+
+/// Tick and label strides for a beat ruler, in 16th notes. A beat is 4, an 8th note is 2.
+/// Labels stay on a beat. The finest mark is a 16th, and only when it has room.
+fn beat_ruler_steps(beat_px: f64) -> (i64, i64) {
+    let px = beat_px / filmcraft_time::SIXTEENTHS_PER_BEAT as f64;
+    if !px.is_finite() || px <= 0.0 {
+        return (4, 4);
+    }
+    let steps = [1_i64, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096];
+    let mut label = steps.iter().copied().find(|s| *s as f64 * px >= 110.0).unwrap_or(4096).max(4);
+    if label % 4 != 0 {
+        label = label.saturating_add(4 - (label % 4));
+    }
+    let minor = [1_i64, 2, 4].into_iter().rev().filter(|k| label % k == 0).map(|k| label / k).find(|m| *m as f64 * px >= 12.0).unwrap_or(label).max(1);
+    (minor, label)
+}
+
+fn format_bpm(bpm: f64) -> String {
+    if bpm.fract() == 0.0 { format!("{bpm:.0}") } else { format!("{bpm:.2}") }
+}
+
+/// Draw the ruler in beats. Returns whether it did (a tempo the clock can count).
+fn draw_beat_ticks(clip: &egui::Painter, layout: &Layout, t: &Tokens, label_y: f32, tick_base: f32, bpm: f64) -> bool {
+    let Some(step) = filmcraft_time::ticks_per_sixteenth(bpm) else { return false };
+    let beat_px = layout.pps * 60.0 / bpm;
+    if !beat_px.is_finite() || beat_px <= 0.0 {
+        return false;
+    }
+    let (minor, label_step) = beat_ruler_steps(beat_px);
+    let ruler = layout.ruler;
+    let t0 = layout.tick_at(ruler.min.x).0.max(0);
+    let t1 = layout.tick_at(ruler.max.x).0.max(t0);
+    let mut b = (t0.div_euclid(step) / minor) * minor;
+    if b < 0 {
+        b = 0;
+    }
+    let last = t1.div_euclid(step).saturating_add(1);
+    loop {
+        if b > last {
+            break;
+        }
+        let x = layout.x_of(Tick(b.saturating_mul(step)));
+        let beat = b % filmcraft_time::SIXTEENTHS_PER_BEAT == 0;
+        let major = label_step > 0 && b % label_step == 0;
+        let h = if major { 10.0 } else if beat { 7.0 } else { 4.0 };
+        clip.line_segment([pos2(x, tick_base - h), pos2(x, tick_base)], Stroke::new(1.0, t.tl_ruler_tick));
+        if major {
+            clip.text(pos2(x + 1.0, label_y), Align2::CENTER_CENTER, filmcraft_time::beat_label(b.div_euclid(filmcraft_time::SIXTEENTHS_PER_BEAT)), Tokens::ui(11.0), t.tl_ruler_text);
+        }
+        let next = b.saturating_add(minor);
+        if next <= b {
+            break;
+        }
+        b = next;
+    }
+    true
 }
 
 /// The ruler's marker row: one pentagon per marker in its colour, its range band behind it and,
@@ -265,5 +329,19 @@ fn timeline_settings(app: &mut FilmcraftApp, ui: &mut egui::Ui) {
         app.ui.timeline.video_track_h = 26.0;
         app.ui.timeline.audio_track_h = 26.0;
         ui.close();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::beat_ruler_steps;
+
+    #[test]
+    fn a_wide_beat_shows_sixteenths_and_an_eighth_when_that_is_what_fits() {
+        assert_eq!(beat_ruler_steps(200.0), (1, 4), "16th notes, labelled on each beat");
+        assert_eq!(beat_ruler_steps(80.0), (2, 8), "8th notes when a 16th is too narrow to label every beat");
+        let (minor, label) = beat_ruler_steps(16.0);
+        assert!(minor >= 4, "zoomed out, marks stay on beats or coarser: {minor}");
+        assert_eq!(label % 4, 0, "labels stay on a beat");
     }
 }

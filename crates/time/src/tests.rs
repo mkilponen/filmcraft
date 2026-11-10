@@ -437,6 +437,36 @@ fn exotic_frame_rate_durations() {
     assert_eq!(FrameRate::FPS_60.frame_duration().0, 4_233_600_000);
 }
 
+#[test]
+fn a_tempo_of_120_lands_on_whole_beats() {
+    assert!(checked_tempo(0.0).is_err());
+    assert!(checked_tempo(f64::NAN).is_err());
+    assert!(checked_tempo(1000.0).is_err());
+    assert_eq!(checked_tempo(120.0).unwrap(), 120.0);
+    let per = ticks_per_beat(120.0).unwrap();
+    assert_eq!(per, TICKS_PER_SECOND * 60 / 120);
+    assert_eq!(beat_at(Tick::ZERO, 120.0), Some(0));
+    assert_eq!(beat_at(Tick(per), 120.0), Some(1));
+    assert_eq!(beat_label(0), "1.1");
+    assert_eq!(beat_label(1), "1.2");
+    assert_eq!(beat_label(4), "2.1");
+    assert_eq!(beat_label(-1), "0.4");
+}
+
+#[test]
+fn sixteenths_include_the_beat_and_the_eighth() {
+    let step = ticks_per_sixteenth(120.0).unwrap();
+    assert_eq!(step, ticks_per_beat(120.0).unwrap() / 4);
+    assert_eq!(snap_sixteenth(Tick::ZERO, 120.0), Some(Tick::ZERO));
+    assert_eq!(snap_sixteenth(Tick(step * 2), 120.0), Some(Tick(step * 2)), "an 8th note stays");
+    assert_eq!(snap_sixteenth(Tick(step * 4), 120.0), Some(Tick(step * 4)), "a beat stays");
+    assert_eq!(snap_sixteenth(Tick(step / 2), 120.0), Some(Tick::ZERO), "a tie stays on the earlier 16th");
+    assert_eq!(snap_sixteenth(Tick(step / 2 + 1), 120.0), Some(Tick(step)));
+    let again = snap_sixteenth(Tick(step + 10), 120.0).unwrap();
+    assert_eq!(snap_sixteenth(again, 120.0), Some(again));
+    assert!(ticks_per_sixteenth(0.0).is_none());
+}
+
 proptest! {
     #[test]
     fn extreme_frame_math_stays_monotonic(num in 1i64..=i64::MAX, den in 1i64..=i64::MAX, a in any::<i64>(), b in any::<i64>()) {

@@ -250,6 +250,33 @@ fn sequence_settings_video_display_format() {
 }
 
 #[test]
+fn sequence_tempo_sets_clears_and_rejects_a_bad_number() {
+    let mut s = demo();
+    assert_eq!(s.active_sequence().unwrap().settings.tempo_bpm, None);
+    let before = (*s.project).clone();
+    let history = s.history.undo.len();
+    for params in [json!({}), json!({"bpm": "fast"}), json!({"bpm": 0}), json!({"bpm": -10.0}), json!({"bpm": 1000.0})] {
+        assert!(s.execute("sequence.setTempo", params.clone()).is_err(), "{params}");
+        assert_eq!(*s.project, before, "{params}");
+        assert_eq!(s.history.undo.len(), history);
+    }
+    let set = s.execute("sequence.setTempo", json!({"bpm": 120.0})).unwrap();
+    assert_eq!(set["bpm"], json!(120.0));
+    assert_eq!(s.active_sequence().unwrap().settings.tempo_bpm, Some(120.0));
+    assert_eq!(s.undo().as_deref(), Some("Set Timeline to Tempo"));
+    assert_eq!(s.active_sequence().unwrap().settings.tempo_bpm, None);
+    s.redo();
+    assert_eq!(s.active_sequence().unwrap().settings.tempo_bpm, Some(120.0));
+    let again = s.history.undo.len();
+    s.execute("sequence.setTempo", json!({"bpm": 120.0})).unwrap();
+    assert_eq!(s.history.undo.len(), again, "the same tempo is not another undo step");
+    let cleared = s.execute("sequence.setTempo", json!({"bpm": null})).unwrap();
+    assert_eq!(cleared["bpm"], json!(null));
+    assert_eq!(s.active_sequence().unwrap().settings.tempo_bpm, None);
+    assert_eq!(s.undo().as_deref(), Some("Show Timecode"));
+}
+
+#[test]
 fn sequence_settings_timecode_render_quality_and_colour() {
     let mut s = demo();
     s.execute("sequence.settings", json!({"fps":29.97,"dropFrame":true,"maxRenderQuality":true})).unwrap();

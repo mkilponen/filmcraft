@@ -63,7 +63,7 @@ pub type Migration = fn(Value) -> Result<Value, String>;
 /// edit a shipped one.
 pub const MIGRATIONS: &[Migration] = &[
     v1_to_v2, v2_to_v3, v3_to_v4, v4_to_v5, v5_to_v6, v6_to_v7, v7_to_v8, v8_to_v9, v9_to_v10, v10_to_v11, v11_to_v12, v12_to_v13, v13_to_v14, v14_to_v15,
-    v15_to_v16, v16_to_v17,
+    v15_to_v16, v16_to_v17, v17_to_v18,
 ];
 
 /// The schema version this build writes (and the newest it reads).
@@ -406,13 +406,35 @@ fn v16_to_v17(doc: Value) -> Result<Value, String> {
     Ok(doc)
 }
 
+/// v17 → v18: sequence tempo defaults absent. Older builds must not silently drop a saved tempo.
+fn v17_to_v18(doc: Value) -> Result<Value, String> {
+    Ok(doc)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn schema_version_matches_table() {
-        assert_eq!(SCHEMA_VERSION, 17);
+        assert_eq!(SCHEMA_VERSION, 18);
+    }
+
+    #[test]
+    fn a_v17_file_opens_and_a_tempo_survives_a_save() {
+        let mut v: Value = serde_json::from_slice(&encode(&Project::new("v17"), false)).unwrap();
+        v["schema_version"] = Value::from(17);
+        let loaded = decode(&serde_json::to_vec(&v).unwrap()).unwrap();
+        assert_eq!(loaded.schema_version, 17, "the file remembers the schema it was saved in");
+        assert!(loaded.migrated());
+        assert_eq!(loaded.project.name, "v17");
+
+        let mut p = Project::new("Tempo");
+        let id = p.new_sequence("s", filmcraft_project::SequenceSettings::default(), 1, 0, None);
+        p.sequence_mut(id).unwrap().settings.tempo_bpm = Some(120.0);
+        let again = decode(&encode(&p, false)).unwrap();
+        assert_eq!(again.schema_version, SCHEMA_VERSION);
+        assert_eq!(again.project.sequence(id).unwrap().settings.tempo_bpm, Some(120.0));
     }
 
     #[test]

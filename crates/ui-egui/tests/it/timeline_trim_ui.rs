@@ -912,3 +912,34 @@ fn the_trim_cursor_stays_while_a_transition_end_is_dragged() {
     assert_eq!(d.cursor(), CursorIcon::ResizeColumn, "trim cursor while dragging, 40 px on");
     d.release(to);
 }
+
+/// With a tempo, and with snapping off, a video clip still lands on a 16th note. That grid
+/// also holds the 8th notes and the 4/4 beats.
+#[test]
+fn a_video_drag_lands_on_a_sixteenth_when_the_timeline_has_a_tempo() {
+    let mut d = Driver::demo();
+    d.exec("sequence.setTempo", json!({"bpm": 120.0}));
+    let city = d.v1_clip(CITY);
+    let (s0, _) = d.span(city);
+    let start_s = s0 as f64 / filmcraft_time::TICKS_PER_SECOND as f64;
+    d.harness.state_mut().ui.timeline.pps = 200.0;
+    d.harness.state_mut().ui.timeline.target_pps = 200.0;
+    d.harness.state_mut().ui.timeline.scroll = (start_s - 0.05).max(0.0);
+    d.harness.state_mut().ui.timeline.target_scroll = (start_s - 0.05).max(0.0);
+    d.harness.state_mut().ui.timeline.fit_pending = false;
+    d.frames(2);
+    let at = d.ok("ui.timeline.locate", json!({"clip": city, "edge": "in"}));
+    let x = at["x"].as_f64().expect("x") as f32 + 40.0;
+    let y = at["y"].as_f64().expect("y") as f32;
+    let tpp = filmcraft_time::TICKS_PER_SECOND as f64 / d.app().ui.timeline.pps;
+    let step = filmcraft_time::ticks_per_sixteenth(120.0).unwrap();
+    let px = ((step + step / 2 + d.frame()) as f64 / tpp).max(12.0);
+    let from = pos2(x, y);
+    d.drag(from, pos2(from.x + px as f32, from.y), 16);
+    let (s1, e1) = d.span(city);
+    assert_ne!(s1, s0, "the clip moved");
+    assert!(s1.rem_euclid(step) == 0 || e1.rem_euclid(step) == 0, "a video edge is on a 16th: start {s1}, end {e1}");
+    let pointer = (px * tpp).round() as i64;
+    let err = (s1 - s0 - pointer).unsigned_abs();
+    assert!(err <= step as u64 / 2 + d.frame() as u64, "snapped to the grid near the pointer: moved {} ticks, pointer {pointer}, step {step}", s1 - s0);
+}

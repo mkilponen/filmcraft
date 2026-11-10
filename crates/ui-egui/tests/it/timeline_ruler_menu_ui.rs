@@ -114,3 +114,62 @@ fn mark_selection_in_the_ruler_menu_marks_the_selected_clips() {
     assert_eq!(q.mark_in, Some(start), "the In point is the selection's start");
     assert_eq!(q.mark_out, Some(end - frame), "the Out point is its last frame");
 }
+
+fn ruler_label(d: &mut Driver) -> String {
+    let v = d.ok("ui.elements", json!({"prefix": "timeline.ruler"}));
+    v.as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["id"] == "timeline.ruler")
+        .and_then(|e| e["label"].as_str())
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// Right-clicking the ruler offers Set Timeline to Tempo. OK stores the BPM and the ruler
+/// announces it; Show timecode clears it. Cancel stores nothing.
+#[test]
+fn right_clicking_the_ruler_sets_the_timeline_to_a_tempo() {
+    let mut d = Driver::demo();
+    let (x, y) = d.centre("timeline.ruler");
+    d.ok("ui.click", json!({"x": x + 300.0, "y": y, "button": "right"}));
+    assert!(has(&mut d, "timeline.menu.setTempo"), "Set Timeline to Tempo is offered");
+    d.ok("ui.click", json!({"id": "timeline.menu.setTempo"}));
+    d.frames(3);
+    assert!(has(&mut d, "timelineTempo.bpm"));
+    d.ok("ui.click", json!({"id": "timelineTempo.cancel"}));
+    d.frames(2);
+    assert!(d.harness.state().session.active_sequence().unwrap().settings.tempo_bpm.is_none(), "Cancel stores nothing");
+
+    d.ok("ui.click", json!({"x": x + 300.0, "y": y, "button": "right"}));
+    d.ok("ui.click", json!({"id": "timeline.menu.setTempo"}));
+    d.frames(3);
+    d.ok("ui.click", json!({"id": "timelineTempo.bpm"}));
+    d.frames(2);
+    d.ok("ui.key", json!({"key": "Cmd+A"}));
+    d.ok("ui.type", json!({"text": "96"}));
+    d.ok("ui.key", json!({"key": "Enter"}));
+    d.frames(2);
+    d.ok("ui.click", json!({"id": "timelineTempo.ok"}));
+    d.frames(3);
+    assert_eq!(d.harness.state().session.active_sequence().unwrap().settings.tempo_bpm, Some(96.0));
+    let label = ruler_label(&mut d);
+    assert!(label.contains("96 BPM"), "{label}");
+
+    d.ok("ui.click", json!({"x": x + 300.0, "y": y, "button": "right"}));
+    d.ok("ui.click", json!({"id": "timeline.menu.setTempo"}));
+    d.frames(3);
+    d.ok("ui.click", json!({"id": "timelineTempo.clear"}));
+    d.frames(3);
+    assert_eq!(d.harness.state().session.active_sequence().unwrap().settings.tempo_bpm, None);
+    assert!(!ruler_label(&mut d).contains("BPM"), "the ruler is back to timecode");
+}
+
+/// A right-click on a clip, which is also the timeline, offers the same command.
+#[test]
+fn right_clicking_a_clip_offers_set_timeline_to_tempo() {
+    let mut d = Driver::demo();
+    let clip = d.harness.state().session.active_sequence().unwrap().video_tracks[0].items[0].id.0;
+    d.ok("ui.click", json!({"id": format!("timeline.clip.{clip}"), "button": "right"}));
+    assert!(has(&mut d, "timeline.menu.setTempo"), "the clip menu offers Set Timeline to Tempo");
+}

@@ -29,6 +29,10 @@ pub struct SequenceSettings {
     /// Auto Tone Map Media.
     #[serde(default = "default_color_pipeline")]
     pub color: filmcraft_color::ColorPipeline,
+    /// Beats per minute for the timeline ruler. Absent: the ruler stays in the display format
+    /// (timecode, frames, feet + frames). Files from before this setting load without a tempo.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tempo_bpm: Option<f64>,
 }
 
 fn default_color_pipeline() -> filmcraft_color::ColorPipeline {
@@ -52,6 +56,7 @@ impl Default for SequenceSettings {
             max_render_quality: false,
             working_space: "Rec. 709".into(),
             color: filmcraft_color::ColorPipeline::REC709,
+            tempo_bpm: None,
         }
     }
 }
@@ -132,6 +137,9 @@ impl SequenceSettings {
         }
         if self.par.0 == 0 || self.par.1 == 0 {
             return Err("pixel aspect ratio must be positive".into());
+        }
+        if let Some(bpm) = self.tempo_bpm {
+            filmcraft_time::checked_tempo(bpm)?;
         }
         Ok(())
     }

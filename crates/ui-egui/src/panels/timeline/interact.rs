@@ -1,7 +1,7 @@
 use super::clips::paint_hatch;
 use super::layout::{Layout, max_scroll, min_pps, new_track_at};
-use super::menus::{CLIP_MENU, EditPointTarget, edit_point_menu, gap_menu, marker_menu, multicam_menu, ruler_menu};
-use super::snap::{snap, snap_playhead, snap_transition};
+use super::menus::{CLIP_MENU, EditPointTarget, edit_point_menu, gap_menu, marker_menu, multicam_menu, ruler_menu, tempo_item};
+use super::snap::{land, move_delta, on_video, snap, snap_playhead, snap_transition};
 use super::{
     Align2, ClipId, Color32, CursorIcon, Drag, EdgeKind, FilmcraftApp, Grab, HashMap, Hit, MarkerId, MarqueeAnchor, Pos2, Pressed, Rect, Sense, Sequence,
     Stroke, StrokeKind, Tick, Tokens, Tool, TrackId, TrackItem, TrackKind, Value, edge_geometry, grab_at, hit, json, marker_at, marker_under_pointer, pos2,
@@ -300,7 +300,6 @@ fn hover_cursor(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequence, layou
     let area = Rect::from_min_max(pos2(layout.content.min.x, layout.ruler.min.y), layout.content.max);
     let mods = ctx.input(|i| i.modifiers);
     let tool = app.ui.tool;
-    let rate = seq.settings.frame_rate;
     let roll_ripple = app.session.prefs.trim.selection_tool_roll_ripple;
     // ---- cursor feedback: what a press here would grab (#259)
     if app.tl.drag.is_none()
@@ -350,7 +349,8 @@ fn hover_cursor(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequence, layou
             && let Grab::Other(Hit::Clip { track, .. }) = g
             && let Some(row) = layout.rows.iter().find(|r| r.track == track)
         {
-            let t = snap(app, seq, layout, rate.snap_nearest(layout.tick_at(p.x)), &[]);
+            let video = seq.track(track).is_some_and(|tr| tr.kind == TrackKind::Video);
+            let t = land(app, seq, layout, layout.tick_at(p.x), &[], video);
             let x = layout.x_of(t);
             ui.painter().line_segment([pos2(x, row.rect.min.y), pos2(x, row.rect.max.y)], Stroke::new(1.0, Color32::WHITE));
         }
@@ -412,7 +412,6 @@ fn start_drag(
 ) {
     let tool = app.ui.tool;
     let mods = ctx.input(|i| i.modifiers);
-    let rate = seq.settings.frame_rate;
     let roll_ripple = app.session.prefs.trim.selection_tool_roll_ripple;
     let started = match (tool, grab) {
         // a middle-button drag pans whatever the tool and whatever it starts on, as in the
@@ -441,7 +440,7 @@ fn start_drag(
         }
         (Tool::Razor, Grab::Other(Hit::Clip { clip, .. })) => {
             if resp.clicked() || resp.drag_started() {
-                let tt = snap(app, seq, layout, rate.snap_nearest(t), &[]);
+                let tt = land(app, seq, layout, t, &[], on_video(seq, clip));
                 let r = if mods.shift {
                     app.session.execute("timeline.razor", json!({"time": tt.0}))
                 } else {
@@ -683,13 +682,10 @@ fn drag_update(app: &mut FilmcraftApp, ui: &mut egui::Ui, resp: &egui::Response,
                 Some(Drag::Pan { last: p, start_scroll, start_v, audio, start_a })
             }
             Drag::Move { clips, grab_tick, start_track, .. } => {
-                let raw = rate.snap_nearest(t_here - grab_tick);
-                // snap the moved block's start or end
+                // snap the moved block's start or end; video on a tempo timeline uses the beat grid
                 let first = clips.iter().filter_map(|c| seq.find_item(*c).map(|(_, i)| i.start)).min().unwrap_or_default();
                 let last = clips.iter().filter_map(|c| seq.find_item(*c).map(|(_, i)| i.end())).max().unwrap_or_default();
-                let s1 = snap(app, seq, layout, first + raw, &clips) - first;
-                let offset = if s1 != raw { s1 } else { snap(app, seq, layout, last + raw, &clips) - last };
-                let offset = offset.max(-first);
+                let offset = move_delta(app, seq, layout, &clips, (t_here - grab_tick, first, last)).max(-first);
                 let cur_row = layout.row_at(p.y);
                 let start_row = layout.rows.iter().find(|r| r.track == start_track);
                 let track_delta = match (cur_row, start_row) {
@@ -712,7 +708,7 @@ fn drag_update(app: &mut FilmcraftApp, ui: &mut egui::Ui, resp: &egui::Response,
             }
             Drag::Trim { clip, edge, mode, from, linked, .. } => seq.find_item(clip).map(|(_, it)| {
                 let base = if edge == filmcraft_edit::Edge::In { it.start } else { it.end() };
-                let target = snap(app, seq, layout, rate.snap_nearest(base + (t_here - from)), &[clip]);
+                let target = land(app, seq, layout, base + (t_here - from), &[clip], on_video(seq, clip));
                 // stop at the end of the media (or the neighbour), as the trim on release will (#653)
                 let delta = filmcraft_engine::commands::trim_delta_linked(&app.session, clip, edge, mode, target - base, linked).unwrap_or(target - base);
                 Drag::Trim { clip, edge, mode, delta, from, linked }
@@ -723,11 +719,12 @@ fn drag_update(app: &mut FilmcraftApp, ui: &mut egui::Ui, resp: &egui::Response,
             }),
             Drag::Stretch { clip, edge, from, linked, .. } => seq.find_item(clip).map(|(_, it)| {
                 let base = if edge == filmcraft_edit::Edge::In { it.start } else { it.end() };
-                let target = snap(app, seq, layout, rate.snap_nearest(base + (t_here - from)), &[clip]);
+                let target = land(app, seq, layout, base + (t_here - from), &[clip], on_video(seq, clip));
                 Drag::Stretch { clip, edge, delta: target - base, from, linked }
             }),
             Drag::Roll { left, right, from, .. } => seq.find_item(left).map(|(_, l)| {
-                let target = snap(app, seq, layout, rate.snap_nearest(l.end() + (t_here - from)), &[left, right]);
+                let video = on_video(seq, left) || on_video(seq, right);
+                let target = land(app, seq, layout, l.end() + (t_here - from), &[left, right], video);
                 // stop where the roll on release stops: the media, a frame left in each clip and linked
                 // cuts
                 let delta = filmcraft_engine::commands::roll_delta(&app.session, left, right, target - l.end()).unwrap_or(target - l.end());
@@ -740,13 +737,26 @@ fn drag_update(app: &mut FilmcraftApp, ui: &mut egui::Ui, resp: &egui::Response,
             }
             Drag::Slide { clip, .. } => {
                 let origin = ctx.input(|i| i.pointer.press_origin()).map(|o| layout.tick_at(o.x)).unwrap_or(t_here);
-                Some(Drag::Slide { clip, delta: rate.snap_nearest(t_here - origin) })
+                let delta = match seq.find_item(clip) {
+                    Some((_, it)) if on_video(seq, clip) && seq.settings.tempo_bpm.and_then(filmcraft_time::ticks_per_sixteenth).is_some() => {
+                        land(app, seq, layout, it.start + (t_here - origin), &[clip], true) - it.start
+                    }
+                    _ => rate.snap_nearest(t_here - origin),
+                };
+                Some(Drag::Slide { clip, delta })
             }
             Drag::Transition { id, edge, from, start, duration } => {
-                let delta = rate.snap_nearest(t_here - from);
-                let span = seq
-                    .all_tracks()
-                    .find_map(|tr| tr.transitions.iter().find(|x| x.id == id).and_then(|x| snap_transition(app, seq, layout, tr, x, edge, delta)));
+                let span = seq.all_tracks().find_map(|tr| {
+                    let x = tr.transitions.iter().find(|x| x.id == id)?;
+                    let video = tr.kind == TrackKind::Video && seq.settings.tempo_bpm.and_then(filmcraft_time::ticks_per_sixteenth).is_some();
+                    if video {
+                        let base = if edge == Some(filmcraft_edit::Edge::Out) { x.end() } else { x.start };
+                        let delta = land(app, seq, layout, base + (t_here - from), &[], true) - base;
+                        filmcraft_edit::transitions::drag_span(tr, x, edge, delta, rate.frame_duration())
+                    } else {
+                        snap_transition(app, seq, layout, tr, x, edge, rate.snap_nearest(t_here - from))
+                    }
+                });
                 let (start, duration) = span.unwrap_or((start, duration));
                 Some(Drag::Transition { id, edge, from, start, duration })
             }
@@ -955,7 +965,8 @@ fn drop_targets(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequence, layou
                 TrackKind::Audio => s.audio,
             })
         });
-        let t = snap(app, seq, layout, rate.snap_nearest(layout.tick_at(p.x).max(Tick::ZERO)), &[]);
+        let places_video = source.is_none_or(|s| s.video) && app.session.project.item(item).is_some_and(|i| i.has_video());
+        let t = land(app, seq, layout, layout.tick_at(p.x).max(Tick::ZERO), &[], places_video);
         let still = app.session.prefs.timeline.still_duration(rate);
         let is_still = app.session.project.item(item).and_then(|i| i.as_media()).is_some_and(|m| m.info.kind == filmcraft_media::MediaKind::Still);
         let dur = source
@@ -1021,7 +1032,7 @@ fn drop_targets(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequence, layou
         && layout.content.contains(p)
         && app.timeline_drop_target(ui.ctx(), p)
     {
-        let t = snap(app, seq, layout, rate.snap_nearest(layout.tick_at(p.x).max(Tick::ZERO)), &[]);
+        let t = land(app, seq, layout, layout.tick_at(p.x).max(Tick::ZERO), &[], true);
         let row = layout.row_at(p.y).cloned().filter(|r| r.kind == TrackKind::Video);
         if let Some(row) = &row {
             let r = Rect::from_min_max(pos2(layout.x_of(t), row.rect.min.y + 1.0), pos2(layout.x_of(t) + 60.0, row.rect.max.y - 1.0));
@@ -1052,7 +1063,7 @@ fn drop_targets(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequence, layou
                 TrackKind::Video => (Some(row.track.0), seq.audio_tracks.get(row.index).or(seq.audio_tracks.first()).map(|t| t.id.0)),
                 TrackKind::Audio => (seq.video_tracks.get(row.index).or(seq.video_tracks.first()).map(|t| t.id.0), Some(row.track.0)),
             };
-            let start = snap(app, seq, layout, rate.snap_nearest(layout.tick_at(p.x).max(Tick::ZERO)), &[]);
+            let start = land(app, seq, layout, layout.tick_at(p.x).max(Tick::ZERO), &[], row.kind == TrackKind::Video);
             // one command, one undo step: the files go end to end from the drop point
             let ids: Vec<u64> = items.iter().map(|i| i.0).collect();
             let params = json!({"items": ids, "track": vt, "audioTrack": at, "time": start.0, "insert": false});
@@ -1069,7 +1080,7 @@ fn drop_targets(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequence, layou
     {
         let row = layout.row_at(p.y).cloned().or_else(|| layout.rows.iter().find(|r| r.kind == TrackKind::Video).cloned());
         if let Some(row) = row {
-            let t = snap(app, seq, layout, rate.snap_nearest(layout.tick_at(p.x).max(Tick::ZERO)), &[]);
+            let t = land(app, seq, layout, layout.tick_at(p.x).max(Tick::ZERO), &[], row.kind == TrackKind::Video);
             let x = layout.x_of(t);
             let r = Rect::from_min_max(pos2(x, row.rect.min.y + 1.0), pos2((x + 120.0).min(layout.content.max.x), row.rect.max.y - 1.0));
             ui.painter().rect_filled(r, 3.0, Color32::from_white_alpha(40));
@@ -1424,6 +1435,8 @@ pub(super) fn interact(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequence
                     }
                 }
             }
+            ui.separator();
+            tempo_item(app, &ctx, ui);
         });
     });
 

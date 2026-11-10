@@ -2932,6 +2932,31 @@ fn build() -> Vec<CommandSpec> {
                 Ok(json!({"scaledClips": scaled}))
             }
         ),
+        cmd!("sequence.setTempo", "Set Timeline to Tempo…", [], None, r#"{"bpm":f64|null}"#, has_seq, |s, p| {
+            const CMD: &str = "sequence.setTempo";
+            let next = match p.get("bpm") {
+                Some(Value::Null) => None,
+                Some(v) => Some(
+                    filmcraft_time::checked_tempo(v.as_f64().filter(|n| n.is_finite()).ok_or_else(|| bad(CMD, "`bpm` must be a number or null"))?)
+                        .map_err(|e| bad(CMD, e))?,
+                ),
+                None => return Err(bad(CMD, "need `bpm` (a number, or null to show timecode)")),
+            };
+            let current = s.active_sequence().and_then(|q| q.settings.tempo_bpm);
+            let same = match (current, next) {
+                (None, None) => true,
+                (Some(a), Some(b)) => a == b,
+                _ => false,
+            };
+            if !same {
+                let label = if next.is_some() { "Set Timeline to Tempo" } else { "Show Timecode" };
+                s.edit_sequence(label, |q, _, _| {
+                    q.settings.tempo_bpm = next;
+                    Ok(())
+                })?;
+            }
+            Ok(json!({"bpm": s.active_sequence().and_then(|q| q.settings.tempo_bpm)}))
+        }),
         cmd!("sequence.renderEffectsInToOut", "Render Effects In to Out", ["Sequence"], Some("Enter"), r#"{"wait":bool=false}"#, has_seq, |s, p| {
             crate::previews::render(s, crate::previews::RenderMode::EffectsInToOut, p)
         }),

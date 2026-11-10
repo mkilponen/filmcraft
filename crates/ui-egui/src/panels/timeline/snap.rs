@@ -1,4 +1,4 @@
-use filmcraft_project::{Track, Transition};
+use filmcraft_project::{Track, TrackKind, Transition};
 
 use super::layout::Layout;
 use super::{ClipId, FilmcraftApp, Grab, Hit, Pos2, SNAP_PX, Sequence, Tick, Value, grab_at, json};
@@ -6,6 +6,53 @@ use super::{ClipId, FilmcraftApp, Grab, Hit, Pos2, SNAP_PX, Sequence, Tick, Valu
 /// Snap `t` to nearby candidates (edits, playhead, markers, in/out). Returns snapped tick.
 pub(in super::super) fn snap(app: &mut FilmcraftApp, seq: &Sequence, layout: &Layout, t: Tick, exclude: &[ClipId]) -> Tick {
     snap_to(app, seq, layout, t, exclude, true)
+}
+
+/// True when `id` sits on a video track.
+pub(super) fn on_video(seq: &Sequence, id: ClipId) -> bool {
+    seq.find_item(id).is_some_and(|(tid, _)| seq.track(tid).is_some_and(|tr| tr.kind == TrackKind::Video))
+}
+
+/// Nearest 16th note when `video` is edited on a tempo timeline. Beats and 8ths are on that grid.
+/// `None` when this edit stays on the frame grid.
+fn video_grid(seq: &Sequence, t: Tick, video: bool) -> Option<Tick> {
+    if !video {
+        return None;
+    }
+    let bpm = seq.settings.tempo_bpm?;
+    filmcraft_time::snap_sixteenth(t.max(Tick::ZERO), bpm).map(|c| c.max(Tick::ZERO))
+}
+
+/// Where `t` lands. A video edit on a tempo timeline is the nearest 16th note, even when snapping
+/// is off. Anything else is the nearest frame, then the usual edit-point snap.
+pub(super) fn land(app: &mut FilmcraftApp, seq: &Sequence, layout: &Layout, t: Tick, exclude: &[ClipId], video: bool) -> Tick {
+    if let Some(c) = video_grid(seq, t, video) {
+        app.tl.snap_x = Some(layout.x_of(c));
+        return c;
+    }
+    snap(app, seq, layout, seq.settings.frame_rate.snap_nearest(t), exclude)
+}
+
+/// How far a moved block goes. `span` is the pointer's delta and the block's start and end.
+/// With a tempo, a block that includes video keeps its nearer end (the start on a tie) on a
+/// 16th note. Otherwise the start snaps, then the end.
+pub(super) fn move_delta(app: &mut FilmcraftApp, seq: &Sequence, layout: &Layout, clips: &[ClipId], span: (Tick, Tick, Tick)) -> Tick {
+    let (raw, first, last) = span;
+    let video = clips.iter().any(|c| on_video(seq, *c));
+    if video_grid(seq, Tick::ZERO, video).is_some() {
+        let start_raw = first + raw;
+        let end_raw = last + raw;
+        let start_at = video_grid(seq, start_raw, true).unwrap_or(start_raw);
+        let end_at = video_grid(seq, end_raw, true).unwrap_or(end_raw);
+        let start_err = start_at.0.abs_diff(start_raw.0);
+        let end_err = end_at.0.abs_diff(end_raw.0);
+        let (at, edge) = if start_err <= end_err { (start_at, first) } else { (end_at, last) };
+        app.tl.snap_x = Some(layout.x_of(at));
+        return at - edge;
+    }
+    let raw = seq.settings.frame_rate.snap_nearest(raw);
+    let s1 = snap(app, seq, layout, first + raw, clips) - first;
+    if s1 != raw { s1 } else { snap(app, seq, layout, last + raw, clips) - last }
 }
 
 /// Where a dragged playhead lands: [`snap`], but not onto itself, or it would stick where it is

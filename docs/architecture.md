@@ -132,7 +132,7 @@ Project
 └─ next_id
 
 Sequence
-├─ settings: frame rate, size, sample rate, …
+├─ settings: frame rate, size, sample rate, optional tempo (BPM) for the ruler; video edits then snap to 16ths, …
 ├─ video_tracks / audio_tracks: Vec<Track>
 ├─ markers, mark_in / mark_out
 Track

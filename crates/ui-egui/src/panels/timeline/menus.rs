@@ -147,6 +147,8 @@ pub(super) fn edit_point_menu(app: &mut FilmcraftApp, ctx: &egui::Context, ui: &
         }
         ui.close();
     }
+    ui.separator();
+    tempo_item(app, ctx, ui);
 }
 
 /// The menu of a right-click on the header column away from any track: the Add Tracks and Delete
@@ -172,6 +174,17 @@ const RULER_MENU: &[&[(&str, &str)]] = &[
     &[("Add Marker", "markers.add")],
 ];
 
+/// "Set Timeline to Tempo…" on a timeline right-click. Automation id `timeline.menu.setTempo`.
+pub(super) fn tempo_item(app: &mut FilmcraftApp, ctx: &egui::Context, ui: &mut egui::Ui) {
+    let label = tl!("Set Timeline to Tempo…");
+    let r = ui.button(label);
+    app.auto.add("timeline.menu.setTempo", r.rect, label);
+    if r.clicked() {
+        crate::panels::tempo::open(app, ctx);
+        ui.close();
+    }
+}
+
 pub(super) fn ruler_menu(app: &mut FilmcraftApp, ctx: &egui::Context, ui: &mut egui::Ui) {
     for (i, group) in RULER_MENU.iter().enumerate() {
         if i > 0 {
@@ -189,6 +202,8 @@ pub(super) fn ruler_menu(app: &mut FilmcraftApp, ctx: &egui::Context, ui: &mut e
             }
         }
     }
+    ui.separator();
+    tempo_item(app, ctx, ui);
 }
 
 /// The menu of a right-clicked track header: add or delete tracks here, or through the dialogs of
@@ -257,6 +272,8 @@ pub(super) fn gap_menu(app: &mut FilmcraftApp, ctx: &egui::Context, ui: &mut egu
         }
         ui.close();
     }
+    ui.separator();
+    tempo_item(app, ctx, ui);
 }
 
 /// The clip menu's Multi-Camera submenu: Enable, Flatten, and the cameras of the selected nested
