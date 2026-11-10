@@ -149,6 +149,7 @@ pub(super) fn edit_point_menu(app: &mut FilmcraftApp, ctx: &egui::Context, ui: &
     }
     ui.separator();
     tempo_item(app, ctx, ui);
+    pearl_item(app, ctx, ui);
 }
 
 /// The menu of a right-click on the header column away from any track: the Add Tracks and Delete
@@ -185,6 +186,17 @@ pub(super) fn tempo_item(app: &mut FilmcraftApp, ctx: &egui::Context, ui: &mut e
     }
 }
 
+/// "Pearl Necklace…" on a timeline right-click. Automation id `timeline.menu.pearlNecklace`.
+pub(super) fn pearl_item(app: &mut FilmcraftApp, ctx: &egui::Context, ui: &mut egui::Ui) {
+    let label = tl!("Pearl Necklace…");
+    let r = ui.button(label);
+    app.auto.add("timeline.menu.pearlNecklace", r.rect, label);
+    if r.clicked() {
+        crate::panels::pearl::open(ctx);
+        ui.close();
+    }
+}
+
 pub(super) fn ruler_menu(app: &mut FilmcraftApp, ctx: &egui::Context, ui: &mut egui::Ui) {
     for (i, group) in RULER_MENU.iter().enumerate() {
         if i > 0 {
@@ -204,6 +216,7 @@ pub(super) fn ruler_menu(app: &mut FilmcraftApp, ctx: &egui::Context, ui: &mut e
     }
     ui.separator();
     tempo_item(app, ctx, ui);
+    pearl_item(app, ctx, ui);
 }
 
 /// The menu of a right-clicked track header: add or delete tracks here, or through the dialogs of
@@ -274,6 +287,7 @@ pub(super) fn gap_menu(app: &mut FilmcraftApp, ctx: &egui::Context, ui: &mut egu
     }
     ui.separator();
     tempo_item(app, ctx, ui);
+    pearl_item(app, ctx, ui);
 }
 
 /// The clip menu's Multi-Camera submenu: Enable, Flatten, and the cameras of the selected nested

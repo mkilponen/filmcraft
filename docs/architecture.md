@@ -132,7 +132,7 @@ Project
 └─ next_id
 
 Sequence
-├─ settings: frame rate, size, sample rate, optional tempo (BPM) for the ruler; video edits then snap to 16ths, …
+├─ settings: frame rate, size, sample rate, optional tempo (BPM) for the ruler; video edits then snap to 16ths, and a pearl necklace lays one quarter note per clip, with an optional transition between clips, …
 ├─ video_tracks / audio_tracks: Vec<Track>
 ├─ markers, mark_in / mark_out
 Track

@@ -277,6 +277,73 @@ fn sequence_tempo_sets_clears_and_rejects_a_bad_number() {
 }
 
 #[test]
+fn a_pearl_necklace_lays_each_video_as_one_quarter_note() {
+    let mut s = Session::default();
+    s.execute("file.newSequence", json!({"name": "Pearl", "fps": 24.0})).unwrap();
+    let matte = s.execute("file.newColorMatte", json!({"name": "Only", "seconds": 5.0})).unwrap()["item"].as_u64().unwrap();
+    let history = s.history.undo.len();
+    assert!(s.execute("timeline.pearlNecklace", json!({"items": [matte]})).is_err(), "no tempo yet");
+    assert!(s.execute("timeline.pearlNecklace", json!({})).is_err());
+    assert!(s.execute("timeline.pearlNecklace", json!({"paths": ["song.wav"]})).is_err(), "not a video");
+    assert!(s.execute("timeline.pearlNecklace", json!({"items": vec![matte; 501]})).is_err(), "too many");
+    assert_eq!(s.history.undo.len(), history, "a refused necklace changes nothing");
+
+    s.execute("sequence.setTempo", json!({"bpm": 120.0})).unwrap();
+    let mut items = vec![matte];
+    for name in ["A", "B"] {
+        items.push(s.execute("file.newColorMatte", json!({"name": name, "seconds": 5.0})).unwrap()["item"].as_u64().unwrap());
+    }
+    let beat = filmcraft_time::ticks_per_beat(120.0).unwrap();
+    let frame = s.sequence_rate().frame_duration().0;
+    // past the middle of the beat, so the row starts on the next quarter note
+    s.execute("playhead.set", json!({"time": beat / 2 + frame + 1})).unwrap();
+    let laid = s.execute("timeline.pearlNecklace", json!({"items": items})).unwrap();
+    assert_eq!(laid["beat"], json!(beat));
+    assert_eq!(laid["start"], json!(beat), "the row starts on the next quarter note");
+    let q = s.active_sequence().unwrap();
+    let row: Vec<_> = q.video_tracks[0].items.iter().map(|i| (i.start.0, i.duration.0)).collect();
+    assert_eq!(row, vec![(beat, beat), (beat * 2, beat), (beat * 3, beat)]);
+    assert!(q.audio_tracks.iter().all(|t| t.items.is_empty()), "the necklace is picture only");
+    assert_eq!(laid["transitions"], json!(0));
+    assert_eq!(s.undo().as_deref(), Some("Pearl Necklace"));
+    assert!(s.active_sequence().unwrap().video_tracks[0].items.is_empty());
+}
+
+#[test]
+fn a_pearl_necklace_can_put_a_transition_between_each_clip() {
+    let mut s = Session::default();
+    s.execute("file.newSequence", json!({"name": "Pearl", "fps": 24.0})).unwrap();
+    s.execute("sequence.setTempo", json!({"bpm": 120.0})).unwrap();
+    let mut items = Vec::new();
+    for name in ["A", "B", "C"] {
+        items.push(s.execute("file.newColorMatte", json!({"name": name, "seconds": 5.0})).unwrap()["item"].as_u64().unwrap());
+    }
+    let history = s.history.undo.len();
+    assert!(s.execute("timeline.pearlNecklace", json!({"items": items, "transition": "not_a_transition"})).is_err());
+    assert!(s.execute("timeline.pearlNecklace", json!({"items": items, "transition": "cross_dissolve", "transitionNote": "whole"})).is_err());
+    assert_eq!(s.history.undo.len(), history, "a refused transition lays nothing");
+
+    let laid = s.execute("timeline.pearlNecklace", json!({"items": items, "transition": "cross_dissolve", "transitionNote": "eighth"})).unwrap();
+    assert_eq!(laid["transitions"], json!(2));
+    let rate = s.sequence_rate();
+    let transitions = &s.active_sequence().unwrap().video_tracks[0].transitions;
+    assert_eq!(transitions.len(), 2);
+    assert!(transitions.iter().all(|t| t.effect.effect == "cross_dissolve"));
+    assert!(transitions.iter().all(|t| t.duration == rate.tick_of(6)), "an eighth note is half of the 12-frame beat");
+    assert_eq!(s.undo().as_deref(), Some("Pearl Necklace"));
+    assert!(s.active_sequence().unwrap().video_tracks[0].items.is_empty());
+    assert!(s.active_sequence().unwrap().video_tracks[0].transitions.is_empty());
+
+    // shorter than a beat, so the next clip starts a beat later and there is no cut to join
+    let short: Vec<u64> = (0..2)
+        .map(|i| s.execute("file.newColorMatte", json!({"name": format!("s{i}"), "seconds": 0.05})).unwrap()["item"].as_u64().unwrap())
+        .collect();
+    let laid = s.execute("timeline.pearlNecklace", json!({"items": short, "transition": "Dip to Black"})).unwrap();
+    assert_eq!(laid["transitions"], json!(0));
+    assert!(s.active_sequence().unwrap().video_tracks[0].transitions.is_empty());
+}
+
+#[test]
 fn sequence_settings_timecode_render_quality_and_colour() {
     let mut s = demo();
     s.execute("sequence.settings", json!({"fps":29.97,"dropFrame":true,"maxRenderQuality":true})).unwrap();

@@ -39,6 +39,7 @@ pub mod narration;
 mod palette;
 pub mod panels;
 pub mod paste_media;
+pub mod pearl;
 pub mod perf;
 pub mod presets;
 pub mod previews;

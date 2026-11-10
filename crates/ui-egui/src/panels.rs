@@ -33,6 +33,7 @@ pub mod monitor_view;
 pub mod motion_path;
 pub mod multicam;
 pub mod notes;
+pub mod pearl;
 pub mod panel_state;
 pub mod presets;
 pub mod project;

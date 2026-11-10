@@ -165,6 +165,29 @@ fn right_clicking_the_ruler_sets_the_timeline_to_a_tempo() {
     assert!(!ruler_label(&mut d).contains("BPM"), "the ruler is back to timecode");
 }
 
+/// A right-click on the ruler offers Pearl Necklace, and Cancel closes it without laying clips.
+#[test]
+fn right_clicking_the_ruler_opens_pearl_necklace() {
+    let mut d = Driver::demo();
+    let (x, y) = d.centre("timeline.ruler");
+    d.ok("ui.click", json!({"x": x + 300.0, "y": y, "button": "right"}));
+    assert!(has(&mut d, "timeline.menu.pearlNecklace"), "Pearl Necklace is offered");
+    d.ok("ui.click", json!({"id": "timeline.menu.pearlNecklace"}));
+    d.frames(3);
+    assert!(has(&mut d, "timelinePearl.folder"));
+    assert!(has(&mut d, "timelinePearl.transition"));
+    assert!(has(&mut d, "timelinePearl.cancel"));
+    d.ok("ui.click", json!({"id": "timelinePearl.transition"}));
+    d.frames(2);
+    assert!(has(&mut d, "timelinePearl.transition.cross_dissolve"));
+    d.ok("ui.click", json!({"id": "timelinePearl.transition.cross_dissolve"}));
+    d.frames(2);
+    assert!(has(&mut d, "timelinePearl.note"), "a transition offers a note length");
+    d.ok("ui.click", json!({"id": "timelinePearl.cancel"}));
+    d.frames(2);
+    assert!(!has(&mut d, "timelinePearl.folder"), "Cancel closes the dialog");
+}
+
 /// A right-click on a clip, which is also the timeline, offers the same command.
 #[test]
 fn right_clicking_a_clip_offers_set_timeline_to_tempo() {
