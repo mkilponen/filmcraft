@@ -34,6 +34,7 @@ pub mod loudness;
 pub(crate) mod oversample;
 pub mod remix;
 pub mod resample;
+pub mod rhythm;
 mod smooth;
 pub mod stretch;
 pub mod sync;

@@ -7,7 +7,13 @@
 //! video files first (optional `bin`) and then lays them, in the order given. `time` is the tick
 //! the row is nearest to; omitted, it is the playhead. `transition` is a video transition id or
 //! name (`none` omits it). `transitionNote` is `sixteenth`, `eighth` or `quarter` (default
-//! `eighth`): how long that transition is, centered on each cut where two clips meet.
+//! `quarter`): the transition length, and the note the song is cut on. `audio` is one audio file.
+//! The chosen videos repeat until that file ends. `sync` reads the song's hits at the sequence
+//! tempo. `density` is 0 to 1: 1 cuts every selected note, and lower values hold a clip across
+//! several notes and end it on the nearest hit. `energy` is 0 to 1. Zero does not read loudness.
+//! Above zero, each section's loudness and spectrum shorten the full-band parts toward the
+//! selected note, and density scales that hold. A stretch missing bass, mids, or treble is low
+//! energy. Both at 1 cut every selected note.
 
 use filmcraft_project::{ClipId, ItemId};
 use filmcraft_time::{Tick, TimeRange};
@@ -18,8 +24,10 @@ use crate::{Result, Session};
 
 const CMD: &str = "timeline.pearlNecklace";
 
-/// Most videos one necklace takes. A larger list is refused, not cut.
+/// Most source videos one necklace accepts. A larger list is refused, not cut.
 const MAX_CLIPS: usize = 500;
+/// Most clips the row may lay while it repeats across a song.
+const MAX_PLACED: usize = 4_000;
 
 pub fn commands() -> Vec<CommandSpec> {
     vec![CommandSpec {
@@ -27,7 +35,7 @@ pub fn commands() -> Vec<CommandSpec> {
         label: "Pearl Necklace…",
         menu: &[],
         shortcut: None,
-        params: r#"{"items":[id]?,"paths":[str]?,"time":ticks?,"bin":binId?,"transition":str?,"transitionNote":"sixteenth|eighth|quarter"?}"#,
+        params: r#"{"items":[id]?,"paths":[str]?,"time":ticks?,"bin":binId?,"transition":str?,"transitionNote":"sixteenth|eighth|quarter"?,"audio":path?,"sync":bool=false,"density":0..1=1,"energy":0..1=0}"#,
         enabled: has_seq,
         run: lay,
         journal: true,
@@ -57,22 +65,69 @@ fn lay(s: &mut Session, p: &Value) -> Result<Value> {
     let rate = s.sequence_rate();
     let frame = rate.frame_duration();
     let transition = transition_request(p, beat, rate)?;
-    let (clips, transitions) = s.edit_group("Pearl Necklace", |s| {
+    let audio_path = audio_path(p)?;
+    let sync = crate::commands::bool_p(p, "sync").unwrap_or(false);
+    if sync && audio_path.is_none() {
+        return Err(bad(CMD, "attach an audio file to sync to the music"));
+    }
+    let density = if sync { density_param(p)? } else { 1.0 };
+    let energy = if sync { energy_param(p)? } else { 0.0 };
+    let note_steps = if audio_path.is_some() { Some(note_steps(p)?) } else { None };
+    let adest = match &audio_path {
+        Some(_) => Some(s.targeting().audio_dest.ok_or_else(|| bad(CMD, "no audio track"))?),
+        None => None,
+    };
+    let (clips, transitions, audio_clip) = s.edit_group("Pearl Necklace", |s| {
         let ids = match requested {
             Request::Items(ids) => ids,
             Request::Paths(paths) => import_videos(s, p, &paths)?,
         };
-        let mut out = Vec::with_capacity(ids.len());
-        for (i, item) in ids.iter().copied().enumerate() {
+        let audio_item = match &audio_path {
+            Some(path) => Some(import_audio(s, p, path)?),
+            None => None,
+        };
+        let cuts = match audio_item {
+            Some(item) => {
+                let steps = note_steps.ok_or_else(|| bad(CMD, "`transitionNote` is sixteenth, eighth or quarter"))?;
+                Some(audio_cuts(s, item, bpm, density, energy, steps)?)
+            }
+            None => None,
+        };
+        let row = match &cuts {
+            Some(bounds) => Tick(*bounds.last().ok_or_else(|| bad(CMD, "the audio file is empty"))?),
+            None => Tick(
+                beat.checked_mul(i64::try_from(ids.len()).map_err(|_| bad(CMD, "too many clips"))?)
+                    .ok_or_else(|| bad(CMD, "the row runs past the end of the timeline"))?,
+            ),
+        };
+        let placed_n = cuts.as_ref().map(|b| b.len().saturating_sub(1)).unwrap_or(ids.len());
+        if placed_n == 0 || placed_n > MAX_PLACED {
+            return Err(bad(
+                CMD,
+                format!("a necklace lays 1 to {MAX_PLACED} clips; this song would need {placed_n}. Lower the transient density or the track energy"),
+            ));
+        }
+        let mut out = Vec::with_capacity(placed_n);
+        for i in 0..placed_n {
+            let item = ids[i % ids.len()];
             let pi = s.project.item(item).ok_or_else(|| bad(CMD, "no such item"))?;
             if !pi.has_video() {
                 return Err(bad(CMD, "each clip needs a picture"));
             }
-            let dur = clip_duration(pi.duration(), Tick(beat), frame);
-            let at = start
-                .0
-                .checked_add(beat.checked_mul(i as i64).ok_or_else(|| bad(CMD, "too many clips"))?)
-                .ok_or_else(|| bad(CMD, "the row runs past the end of the timeline"))?;
+            let (at, gap) = match &cuts {
+                Some(bounds) => {
+                    let at = start.0.checked_add(bounds[i]).ok_or_else(|| bad(CMD, "the row runs past the end of the timeline"))?;
+                    (at, bounds[i + 1] - bounds[i])
+                }
+                None => {
+                    let at = start
+                        .0
+                        .checked_add(beat.checked_mul(i as i64).ok_or_else(|| bad(CMD, "too many clips"))?)
+                        .ok_or_else(|| bad(CMD, "the row runs past the end of the timeline"))?;
+                    (at, beat)
+                }
+            };
+            let dur = clip_duration(pi.duration(), Tick(gap), frame);
             let placed = place_item(
                 s,
                 ItemPlacement {
@@ -88,13 +143,156 @@ fn lay(s: &mut Session, p: &Value) -> Result<Value> {
             )?;
             out.extend(placed.iter().copied());
         }
+        let audio_clip = match (audio_item, adest) {
+            (Some(item), Some(dest)) => {
+                let media = s.project.item(item).map(|i| i.duration()).unwrap_or(Tick::ZERO);
+                let dur = if media.0 > 0 { media.max(frame) } else { row.max(frame) };
+                let placed = place_item(
+                    s,
+                    ItemPlacement {
+                        item,
+                        range: TimeRange::new(Tick::ZERO, dur),
+                        at: start,
+                        vdest: None,
+                        adest: Some(dest),
+                        insert: false,
+                        label: "Pearl Necklace",
+                        audio_split: None,
+                    },
+                )?;
+                placed.first().map(|c| c.0)
+            }
+            _ => None,
+        };
         let transitions = match &transition {
             Some((effect, frames)) => lay_transitions(s, &out, effect, *frames)?,
             None => 0,
         };
-        Ok((out.iter().map(|c| c.0).collect::<Vec<_>>(), transitions))
+        Ok((out.iter().map(|c| c.0).collect::<Vec<_>>(), transitions, audio_clip))
     })?;
-    Ok(json!({"clips": clips, "start": start.0, "beat": beat, "transitions": transitions}))
+    Ok(
+        json!({"clips": clips, "start": start.0, "beat": beat, "transitions": transitions, "audio": audio_clip, "sync": sync, "density": density, "energy": energy}),
+    )
+}
+
+fn density_param(p: &Value) -> Result<f64> {
+    match crate::commands::f64_p(p, "density") {
+        None => Ok(1.0),
+        Some(d) if d.is_finite() && (0.0..=1.0).contains(&d) => Ok(d),
+        Some(_) => Err(bad(CMD, "transient density is from 0 to 1")),
+    }
+}
+
+fn energy_param(p: &Value) -> Result<f64> {
+    match crate::commands::f64_p(p, "energy") {
+        None => Ok(0.0),
+        Some(e) if e.is_finite() && (0.0..=1.0).contains(&e) => Ok(e),
+        Some(_) => Err(bad(CMD, "track energy is from 0 to 1")),
+    }
+}
+
+fn note_steps(p: &Value) -> Result<i64> {
+    match crate::commands::str_p(p, "transitionNote").unwrap_or("quarter") {
+        "quarter" => Ok(4),
+        "eighth" => Ok(2),
+        "sixteenth" => Ok(1),
+        other => Err(bad(CMD, format!("`transitionNote` is sixteenth, eighth or quarter, not `{other}`"))),
+    }
+}
+
+/// Cut ticks across the whole audio file. The videos repeat over these gaps.
+fn audio_cuts(s: &Session, item: ItemId, bpm: f64, density: f64, energy: f64, note_steps: i64) -> Result<Vec<i64>> {
+    let sr = s.active_sequence().map(|q| q.settings.sample_rate).unwrap_or(48_000).max(1);
+    let media = s.project.item(item).map(|i| i.duration()).unwrap_or(Tick::ZERO);
+    if media.0 <= 0 {
+        return Err(bad(CMD, "the audio file is empty"));
+    }
+    let len = media.to_units_floor(i64::from(sr));
+    if len <= 0 {
+        return Err(bad(CMD, "the audio file is empty"));
+    }
+    let step = filmcraft_audio_dsp::rhythm::sixteenth_samples(sr, bpm).map_err(|e| bad(CMD, e.to_string()))?;
+    // Full density is already one note in every section, so loudness cannot shorten it.
+    // Zero energy does not read loudness at all.
+    let (hits, sections) = if density < 1.0 {
+        let channels = load_audio(s, item, sr, len)?;
+        let refs: Vec<&[f32]> = channels.iter().map(Vec::as_slice).collect();
+        let hits = filmcraft_audio_dsp::rhythm::map_transients(&refs, sr, bpm)
+            .map_err(|e| bad(CMD, e.to_string()))?
+            .transients
+            .into_iter()
+            .map(|t| t.sample)
+            .collect();
+        let sections = if energy > 0.0 { filmcraft_audio_dsp::rhythm::map_sections(&refs, sr, bpm).map_err(|e| bad(CMD, e.to_string()))? } else { Vec::new() };
+        (hits, sections)
+    } else {
+        (Vec::new(), Vec::new())
+    };
+    let samples = filmcraft_audio_dsp::rhythm::plan_cuts_with_energy(&hits, step, density, energy, &sections, note_steps, len);
+    let mut bounds = Vec::with_capacity(samples.len());
+    for sample in samples {
+        let tick = if sample >= len { media.0 } else { Tick::from_units(sample, i64::from(sr)).0 };
+        if bounds.last().copied().is_none_or(|last| tick > last) {
+            bounds.push(tick);
+        }
+    }
+    if bounds.last().copied().is_none_or(|last| last < media.0) {
+        bounds.push(media.0);
+    }
+    Ok(bounds)
+}
+
+fn audio_path(p: &Value) -> Result<Option<String>> {
+    match crate::commands::str_p(p, "audio") {
+        Some(path) if !path.is_empty() => {
+            if !is_audio_file(path) {
+                return Err(bad(CMD, "audio must be an audio file"));
+            }
+            Ok(Some(path.to_string()))
+        }
+        _ => Ok(None),
+    }
+}
+
+fn is_audio_file(path: &str) -> bool {
+    let ext = std::path::Path::new(path).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    filmcraft_media::AUDIO_EXTENSIONS.contains(&ext.as_str())
+}
+
+fn import_audio(s: &mut Session, p: &Value, path: &str) -> Result<ItemId> {
+    let mut q = json!({"paths": [path], "imageSequence": false});
+    if let Some(bin) = p.get("bin") {
+        q["bin"] = bin.clone();
+    }
+    let imported = s.execute("file.import", q)?;
+    if let Some(msg) = imported["errors"].as_array().and_then(|a| a.first()).and_then(Value::as_str) {
+        return Err(bad(CMD, msg));
+    }
+    let id = imported["items"]
+        .as_array()
+        .and_then(|a| a.first())
+        .and_then(Value::as_u64)
+        .map(ItemId)
+        .ok_or_else(|| bad(CMD, "the audio file could not be imported"))?;
+    let item = s.project.item(id).ok_or_else(|| bad(CMD, "the audio file could not be imported"))?;
+    if !item.has_audio() {
+        return Err(bad(CMD, "the audio file has no audio"));
+    }
+    Ok(id)
+}
+
+/// The file's samples at `sr`, capped at ten minutes. `len` is the caller's media length in samples.
+fn load_audio(s: &Session, item: ItemId, sr: u32, len: i64) -> Result<Vec<Vec<f32>>> {
+    let max = i64::try_from(u64::from(sr).saturating_mul(filmcraft_audio_dsp::remix::MAX_ANALYSIS_SECONDS)).unwrap_or(i64::MAX);
+    let len = len.min(max);
+    if len <= 0 {
+        return Err(bad(CMD, "the audio file is empty"));
+    }
+    let frames = usize::try_from(len).map_err(|_| bad(CMD, "the audio is longer than 10 minutes"))?;
+    let provider = s.media.provider(s.project.clone(), s.services.clone());
+    let src = filmcraft_render::SourceProvider::source(&provider, item).ok_or_else(|| bad(CMD, "the audio file could not be read"))?;
+    let buf = src.audio(0, frames, sr).map_err(|e| bad(CMD, format!("reading the audio: {e}")))?;
+    Ok(buf.channels)
 }
 
 /// A video transition to lay on each cut, and its length in frames. Absent when the row is hard cuts.
@@ -105,7 +303,7 @@ fn transition_request(p: &Value, beat: i64, rate: filmcraft_time::FrameRate) -> 
     }
     let def = filmcraft_project::vtransition::find_transition(name, filmcraft_project::EffectKind::VideoTransition)
         .ok_or_else(|| bad(CMD, format!("unknown video transition `{name}`")))?;
-    let note = crate::commands::str_p(p, "transitionNote").unwrap_or("eighth");
+    let note = crate::commands::str_p(p, "transitionNote").unwrap_or("quarter");
     Ok(Some((def.id.to_string(), note_frames(note, beat, rate)?)))
 }
 

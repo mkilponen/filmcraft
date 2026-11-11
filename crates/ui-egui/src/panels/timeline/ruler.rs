@@ -234,10 +234,22 @@ fn draw_beat_ticks(clip: &egui::Painter, layout: &Layout, t: &Tokens, label_y: f
         let x = layout.x_of(Tick(b.saturating_mul(step)));
         let beat = b % filmcraft_time::SIXTEENTHS_PER_BEAT == 0;
         let major = label_step > 0 && b % label_step == 0;
-        let h = if major { 10.0 } else if beat { 7.0 } else { 4.0 };
+        let h = if major {
+            10.0
+        } else if beat {
+            7.0
+        } else {
+            4.0
+        };
         clip.line_segment([pos2(x, tick_base - h), pos2(x, tick_base)], Stroke::new(1.0, t.tl_ruler_tick));
         if major {
-            clip.text(pos2(x + 1.0, label_y), Align2::CENTER_CENTER, filmcraft_time::beat_label(b.div_euclid(filmcraft_time::SIXTEENTHS_PER_BEAT)), Tokens::ui(11.0), t.tl_ruler_text);
+            clip.text(
+                pos2(x + 1.0, label_y),
+                Align2::CENTER_CENTER,
+                filmcraft_time::beat_label(b.div_euclid(filmcraft_time::SIXTEENTHS_PER_BEAT)),
+                Tokens::ui(11.0),
+                t.tl_ruler_text,
+            );
         }
         let next = b.saturating_add(minor);
         if next <= b {

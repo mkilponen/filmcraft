@@ -335,12 +335,111 @@ fn a_pearl_necklace_can_put_a_transition_between_each_clip() {
     assert!(s.active_sequence().unwrap().video_tracks[0].transitions.is_empty());
 
     // shorter than a beat, so the next clip starts a beat later and there is no cut to join
-    let short: Vec<u64> = (0..2)
-        .map(|i| s.execute("file.newColorMatte", json!({"name": format!("s{i}"), "seconds": 0.05})).unwrap()["item"].as_u64().unwrap())
-        .collect();
+    let short: Vec<u64> =
+        (0..2).map(|i| s.execute("file.newColorMatte", json!({"name": format!("s{i}"), "seconds": 0.05})).unwrap()["item"].as_u64().unwrap()).collect();
     let laid = s.execute("timeline.pearlNecklace", json!({"items": short, "transition": "Dip to Black"})).unwrap();
     assert_eq!(laid["transitions"], json!(0));
     assert!(s.active_sequence().unwrap().video_tracks[0].transitions.is_empty());
+}
+
+#[test]
+fn a_pearl_necklace_can_cut_the_videos_to_hits_in_an_audio_file() {
+    let mut s = Session::default();
+    s.execute("file.newSequence", json!({"name": "Pearl", "fps": 24.0, "sampleRate": 48_000})).unwrap();
+    s.execute("sequence.setTempo", json!({"bpm": 120.0})).unwrap();
+    let mut items = Vec::new();
+    for name in ["A", "B", "C"] {
+        items.push(s.execute("file.newColorMatte", json!({"name": name, "seconds": 5.0})).unwrap()["item"].as_u64().unwrap());
+    }
+    let history = s.history.undo.len();
+    assert!(s.execute("timeline.pearlNecklace", json!({"items": items, "sync": true})).is_err(), "sync needs an audio file");
+    assert!(s.execute("timeline.pearlNecklace", json!({"items": items, "audio": "song.mp4", "sync": true})).is_err(), "not an audio file");
+    assert!(s.execute("timeline.pearlNecklace", json!({"items": items, "audio": "missing.wav", "sync": true, "density": 2.0})).is_err());
+    assert_eq!(s.history.undo.len(), history);
+
+    let dir = crate::media_test_util::tmp_dir("pearl-rhythm");
+    let sr = 48_000usize;
+    let step = (sr as f64 * 60.0 / 120.0 / 4.0).round() as usize;
+    let beat_n = step * 4;
+    let mut song = vec![0f32; beat_n * 4];
+    for (i, at) in [0, beat_n, beat_n * 2, beat_n * 3].into_iter().enumerate() {
+        let mut rng = 10 + i as u32;
+        for k in 0..800.min(song.len() - at) {
+            rng = rng.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let noise = (rng >> 8) as f32 / (1u32 << 24) as f32 * 2.0 - 1.0;
+            song[at + k] += 0.9 * (-(k as f32) / 80.0).exp() * noise;
+        }
+    }
+    let path = dir.join("hits.wav");
+    std::fs::write(&path, crate::voiceover::write_wav_f32(&song, 48_000)).unwrap();
+    let beat = filmcraft_time::ticks_per_beat(120.0).unwrap();
+    let laid = s.execute("timeline.pearlNecklace", json!({"items": items, "audio": &path, "sync": true, "density": 1.0, "transitionNote": "quarter"})).unwrap();
+    assert_eq!(laid["sync"], json!(true));
+    assert_eq!(laid["density"], json!(1.0));
+    let q = s.active_sequence().unwrap();
+    let row: Vec<_> = q.video_tracks[0].items.iter().map(|i| (i.item.0, i.start.0, i.duration.0)).collect();
+    assert_eq!(
+        row,
+        vec![(items[0], 0, beat), (items[1], beat, beat), (items[2], beat * 2, beat), (items[0], beat * 3, beat)],
+        "the three videos repeat across the whole song"
+    );
+    let audio = &q.audio_tracks[0].items;
+    assert_eq!(audio.len(), 1);
+    assert_eq!((audio[0].start.0, audio[0].duration.0), (0, beat * 4));
+    assert_eq!(s.undo().as_deref(), Some("Pearl Necklace"));
+    assert!(s.active_sequence().unwrap().video_tracks[0].items.is_empty());
+
+    let mid = s.execute("timeline.pearlNecklace", json!({"items": items, "audio": &path, "sync": true, "density": 0.5, "transitionNote": "quarter"})).unwrap();
+    assert_eq!(mid["clips"].as_array().unwrap().len(), 2, "mid density holds two quarter notes when the hits are on the beats");
+    let q = s.active_sequence().unwrap();
+    let row: Vec<_> = q.video_tracks[0].items.iter().map(|i| (i.item.0, i.duration.0)).collect();
+    assert_eq!(row, vec![(items[0], beat * 2), (items[1], beat * 2)]);
+    s.undo();
+}
+
+#[test]
+fn a_pearl_necklace_cuts_loud_sections_faster_than_quiet_ones() {
+    let mut s = Session::default();
+    s.execute("file.newSequence", json!({"name": "Pearl", "fps": 24.0, "sampleRate": 48_000})).unwrap();
+    s.execute("sequence.setTempo", json!({"bpm": 120.0})).unwrap();
+    let mut items = Vec::new();
+    for name in ["A", "B", "C"] {
+        items.push(s.execute("file.newColorMatte", json!({"name": name, "seconds": 5.0})).unwrap()["item"].as_u64().unwrap());
+    }
+    let history = s.history.undo.len();
+    assert!(s.execute("timeline.pearlNecklace", json!({"items": items, "audio": "missing.wav", "sync": true, "energy": 1.5})).is_err());
+    assert_eq!(s.history.undo.len(), history, "a bad track energy lays nothing");
+
+    let dir = crate::media_test_util::tmp_dir("pearl-energy");
+    let sr = 48_000usize;
+    let beat_n = (sr as f64 * 60.0 / 120.0).round() as usize;
+    let mut song = vec![0f32; beat_n * 8];
+    let from = beat_n * 4;
+    for i in from..song.len() {
+        let t = i as f32 / sr as f32;
+        let turn = std::f32::consts::TAU * t;
+        song[i] = 0.2 * ((turn * 80.0).sin() + (turn * 1_000.0).sin() + (turn * 6_000.0).sin());
+    }
+    let path = dir.join("quiet-then-loud.wav");
+    std::fs::write(&path, crate::voiceover::write_wav_f32(&song, 48_000)).unwrap();
+    let beat = filmcraft_time::ticks_per_beat(120.0).unwrap();
+
+    let strict = s
+        .execute("timeline.pearlNecklace", json!({"items": items, "audio": &path, "sync": true, "density": 1.0, "energy": 1.0, "transitionNote": "quarter"}))
+        .unwrap();
+    assert_eq!(strict["energy"], json!(1.0));
+    let q = s.active_sequence().unwrap();
+    let row: Vec<_> = q.video_tracks[0].items.iter().map(|i| i.duration.0).collect();
+    assert_eq!(row, vec![beat; 8], "both sliders at full cut every quarter note");
+    s.undo().unwrap();
+
+    let mixed = s
+        .execute("timeline.pearlNecklace", json!({"items": items, "audio": &path, "sync": true, "density": 0.5, "energy": 1.0, "transitionNote": "quarter"}))
+        .unwrap();
+    assert_eq!(mixed["energy"], json!(1.0));
+    let q = s.active_sequence().unwrap();
+    let row: Vec<_> = q.video_tracks[0].items.iter().map(|i| i.duration.0).collect();
+    assert_eq!(row, vec![beat * 4, beat, beat, beat, beat], "the quiet half is one clip and the loud half is a quarter note each");
 }
 
 #[test]

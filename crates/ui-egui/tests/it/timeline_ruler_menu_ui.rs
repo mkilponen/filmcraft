@@ -117,13 +117,7 @@ fn mark_selection_in_the_ruler_menu_marks_the_selected_clips() {
 
 fn ruler_label(d: &mut Driver) -> String {
     let v = d.ok("ui.elements", json!({"prefix": "timeline.ruler"}));
-    v.as_array()
-        .unwrap()
-        .iter()
-        .find(|e| e["id"] == "timeline.ruler")
-        .and_then(|e| e["label"].as_str())
-        .unwrap_or_default()
-        .to_string()
+    v.as_array().unwrap().iter().find(|e| e["id"] == "timeline.ruler").and_then(|e| e["label"].as_str()).unwrap_or_default().to_string()
 }
 
 /// Right-clicking the ruler offers Set Timeline to Tempo. OK stores the BPM and the ruler
@@ -176,6 +170,10 @@ fn right_clicking_the_ruler_opens_pearl_necklace() {
     d.frames(3);
     assert!(has(&mut d, "timelinePearl.folder"));
     assert!(has(&mut d, "timelinePearl.transition"));
+    assert!(has(&mut d, "timelinePearl.audio"));
+    assert!(has(&mut d, "timelinePearl.sync"));
+    assert!(has(&mut d, "timelinePearl.density"));
+    assert!(has(&mut d, "timelinePearl.energy"));
     assert!(has(&mut d, "timelinePearl.cancel"));
     d.ok("ui.click", json!({"id": "timelinePearl.transition"}));
     d.frames(2);

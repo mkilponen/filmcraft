@@ -4,7 +4,9 @@
 //! Automation ids: `timelinePearl.folder`, `timelinePearl.ok`, `timelinePearl.cancel`,
 //! `timelinePearl.all`, `timelinePearl.none`, `timelinePearl.file.<n>`,
 //! `timelinePearl.transition`, `timelinePearl.transition.<id>`, `timelinePearl.note`,
-//! `timelinePearl.note.<sixteenth|eighth|quarter>`.
+//! `timelinePearl.note.<sixteenth|eighth|quarter>`, `timelinePearl.audio`,
+//! `timelinePearl.audioClear`, `timelinePearl.sync`, `timelinePearl.density`,
+//! `timelinePearl.energy`.
 
 use serde_json::json;
 
@@ -26,6 +28,14 @@ struct Draft {
     transition: String,
     /// `sixteenth`, `eighth` or `quarter`.
     note: String,
+    /// Path of the song under the row. Empty when none is attached.
+    audio: String,
+    /// Cut each video to the next hit in `audio`, at the timeline tempo.
+    sync: bool,
+    /// 0–100. 100 cuts every selected note. Lower values hold longer and end on a hit.
+    density: f32,
+    /// 0–100. Zero ignores loudness. 100 shortens the loud sections toward the selected note.
+    energy: f32,
     error: Option<String>,
 }
 
@@ -36,7 +46,20 @@ fn draft_id() -> egui::Id {
 /// Open the dialog. Nothing is imported until OK.
 pub fn open(ctx: &egui::Context) {
     ctx.data_mut(|m| {
-        m.insert_temp(draft_id(), Some(Draft { folder: String::new(), files: Vec::new(), transition: String::new(), note: "eighth".into(), error: None }))
+        m.insert_temp(
+            draft_id(),
+            Some(Draft {
+                folder: String::new(),
+                files: Vec::new(),
+                transition: String::new(),
+                note: "quarter".into(),
+                audio: String::new(),
+                sync: false,
+                density: 100.0,
+                energy: 0.0,
+                error: None,
+            }),
+        )
     });
 }
 
@@ -45,6 +68,10 @@ pub fn show(app: &mut FilmcraftApp, ctx: &egui::Context) {
     let mut close = false;
     let mut apply = false;
     let mut browse = false;
+    let mut pick_audio = false;
+    if d.audio.is_empty() {
+        d.sync = false;
+    }
     let mut all = false;
     let mut none = false;
     let mut elems: Vec<(String, egui::Rect, String)> = Vec::new();
@@ -58,7 +85,7 @@ pub fn show(app: &mut FilmcraftApp, ctx: &egui::Context) {
         .default_pos(crate::widgets::dialog_center(ctx))
         .show(ctx, |ui| {
             ui.set_min_width(420.0);
-            ui.label(tl!("Each selected video becomes one quarter note, laid in a row."));
+            ui.label(tl!("Selected videos are laid in a row. With a song, they repeat until the song ends."));
             match tempo {
                 Some(bpm) => {
                     ui.label(tlf!("At {bpm} BPM a quarter note is one beat.", bpm = format_bpm(bpm)));
@@ -68,6 +95,7 @@ pub fn show(app: &mut FilmcraftApp, ctx: &egui::Context) {
                 }
             };
             transition_row(ui, &mut d, &mut elems);
+            audio_row(ui, &app.hooks, &mut d, &mut elems, &mut pick_audio);
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 let folder = if d.folder.is_empty() { tl!("No folder chosen").to_string() } else { d.folder.clone() };
@@ -153,19 +181,43 @@ pub fn show(app: &mut FilmcraftApp, ctx: &egui::Context) {
             ctx.data_mut(|m| m.insert_temp(draft_id(), Some(draft)));
         });
     }
+    if pick_audio && !close {
+        let ctx = ctx.clone();
+        app.pick_ui(FileDialog::open_file("Audio", filmcraft_media::AUDIO_EXTENSIONS), move |_app, paths| {
+            let Some(path) = paths.into_iter().next() else { return };
+            let Some(Some(mut draft)) = ctx.data(|m| m.get_temp::<Option<Draft>>(draft_id())) else { return };
+            draft.audio = path;
+            draft.error = None;
+            ctx.data_mut(|m| m.insert_temp(draft_id(), Some(draft)));
+        });
+    }
     if apply && !close {
         let paths: Vec<String> = d.files.iter().filter(|f| f.on).map(|f| f.path.clone()).collect();
         let mut params = json!({"paths": paths});
         params["bin"] = json!(app.import_bin().0);
+        if !d.transition.is_empty() || d.sync {
+            params["transitionNote"] = json!(d.note);
+        }
         if !d.transition.is_empty() {
             params["transition"] = json!(d.transition);
-            params["transitionNote"] = json!(d.note);
+        }
+        if !d.audio.is_empty() {
+            params["audio"] = json!(d.audio);
+            params["sync"] = json!(d.sync);
+            if d.sync {
+                params["density"] = json!(d.density as f64 / 100.0);
+                params["energy"] = json!(d.energy as f64 / 100.0);
+            }
         }
         match app.session.execute("timeline.pearlNecklace", params) {
             Ok(v) => {
                 let n = v["clips"].as_array().map(Vec::len).unwrap_or(0);
                 let transitions = v["transitions"].as_u64().unwrap_or(0);
-                app.ui.status = if transitions > 0 {
+                app.ui.status = if !d.audio.is_empty() && d.sync {
+                    tlf!("{n} clips cut to the music", n = n)
+                } else if !d.audio.is_empty() {
+                    tlf!("{n} clips across the song", n = n)
+                } else if transitions > 0 {
                     tlf!("{n} clips laid, one quarter note each, with {transitions} transitions", n = n, transitions = transitions)
                 } else {
                     tlf!("{n} clips laid, one quarter note each", n = n)
@@ -178,8 +230,7 @@ pub fn show(app: &mut FilmcraftApp, ctx: &egui::Context) {
     ctx.data_mut(|m| m.insert_temp(draft_id(), if close { None } else { Some(d) }));
 }
 
-const TRANSITION_IDS: &[&str] =
-    &["", "cross_dissolve", "dip_to_black", "dip_to_white", "film_dissolve", "additive_dissolve", "wipe", "push", "slide"];
+const TRANSITION_IDS: &[&str] = &["", "cross_dissolve", "dip_to_black", "dip_to_white", "film_dissolve", "additive_dissolve", "wipe", "push", "slide"];
 
 fn transition_row(ui: &mut egui::Ui, d: &mut Draft, elems: &mut Vec<(String, egui::Rect, String)>) {
     ui.add_space(8.0);
@@ -199,7 +250,7 @@ fn transition_row(ui: &mut egui::Ui, d: &mut Draft, elems: &mut Vec<(String, egu
             ui.min_rect()
         });
         elems.push(("timelinePearl.transition".into(), combo.response.rect, shown));
-        if !d.transition.is_empty() {
+        if !d.transition.is_empty() && !d.sync {
             ui.label(tl!("Length"));
             let shown = note_label(&d.note);
             let combo = craft_ui::ComboBox::from_id_salt("pearl-note").width(130.0).selected_text(&shown).show_ui(ui, |ui| {
@@ -216,6 +267,63 @@ fn transition_row(ui: &mut egui::Ui, d: &mut Draft, elems: &mut Vec<(String, egu
             elems.push(("timelinePearl.note".into(), combo.response.rect, shown));
         }
     });
+}
+
+fn audio_row(ui: &mut egui::Ui, hooks: &crate::hooks::HostHooks, d: &mut Draft, elems: &mut Vec<(String, egui::Rect, String)>, pick_audio: &mut bool) {
+    ui.add_space(8.0);
+    ui.label(tl!("Audio"));
+    ui.horizontal(|ui| {
+        let name = if d.audio.is_empty() {
+            tl!("No audio attached").to_string()
+        } else {
+            std::path::Path::new(&d.audio).file_name().and_then(|n| n.to_str()).unwrap_or(&d.audio).to_string()
+        };
+        ui.label(name);
+        let dialog = FileDialog::open_file("Audio", filmcraft_media::AUDIO_EXTENSIONS);
+        let r = ui.add_enabled(dialog.available(hooks), egui::Button::new(tl!("Attach Audio…")));
+        elems.push(("timelinePearl.audio".into(), r.rect, "Attach Audio…".into()));
+        if r.clicked() {
+            *pick_audio = true;
+        }
+        if !d.audio.is_empty() {
+            let clear = ui.button(tl!("Remove Audio"));
+            elems.push(("timelinePearl.audioClear".into(), clear.rect, "Remove Audio".into()));
+            if clear.clicked() {
+                d.audio.clear();
+                d.sync = false;
+            }
+        }
+    });
+    let sync = ui.add_enabled(!d.audio.is_empty(), egui::Checkbox::new(&mut d.sync, tl!("Sync to music")));
+    elems.push(("timelinePearl.sync".into(), sync.rect, "Sync to music".into()));
+    if d.sync {
+        ui.horizontal(|ui| {
+            ui.label(tl!("Note"));
+            let shown = note_label(&d.note);
+            let combo = craft_ui::ComboBox::from_id_salt("pearl-sync-note").width(130.0).selected_text(&shown).show_ui(ui, |ui| {
+                for id in ["sixteenth", "eighth", "quarter"] {
+                    let label = note_label(id);
+                    let r = ui.selectable_label(d.note == id, &label);
+                    if r.clicked() {
+                        d.note = id.to_string();
+                    }
+                    elems.push((format!("timelinePearl.note.{id}"), r.rect, label));
+                }
+                ui.min_rect()
+            });
+            elems.push(("timelinePearl.note".into(), combo.response.rect, shown));
+        });
+    }
+    ui.label(tl!("Transient density"));
+    let density = ui.add_enabled(d.sync, egui::Slider::new(&mut d.density, 0.0..=100.0).step_by(1.0));
+    elems.push(("timelinePearl.density".into(), density.rect, format!("{:.0}", d.density)));
+    ui.label(tl!("Full density cuts every selected note. Lower density holds across several notes and ends on the nearest hit."));
+    ui.label(tl!("Track energy"));
+    let energy = ui.add_enabled(d.sync, egui::Slider::new(&mut d.energy, 0.0..=100.0).step_by(1.0));
+    elems.push(("timelinePearl.energy".into(), energy.rect, format!("{:.0}", d.energy)));
+    ui.label(tl!(
+        "Zero ignores loudness. A stretch is full on only when bass, mids, and treble are all present. Both sliders at full cut every selected note."
+    ));
 }
 
 fn transition_label(id: &str) -> String {
