@@ -136,6 +136,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     uic!("tool.rolling", "Rolling Edit Tool", [], Some("N")),
     uic!("tool.rateStretch", "Rate Stretch Tool", [], Some("R")),
     uic!("tool.remix", "Remix Tool", [], None),
+    uic!("tool.clipShuffler", "Clip Shuffler", [], None),
     uic!("tool.razor", "Razor Tool", [], Some("C")),
     uic!("tool.slip", "Slip Tool", [], Some("Y")),
     uic!("tool.slide", "Slide Tool", [], Some("U")),
@@ -327,8 +328,7 @@ pub fn invoke_command(app: &mut FilmcraftApp, ctx: &egui::Context, id: &str, mut
     }
     if let Some(t) = id.strip_prefix("tool.") {
         let tool = Tool::from_name(t).ok_or_else(|| format!("unknown tool `{t}`"))?;
-        app.ui.tool = tool;
-        return Ok(json!({"tool": tool}));
+        return crate::panels::shuffle::on_tool_picked(app, tool);
     }
     if let Some(r) = crate::panels::keyboard::route(app, ctx, id, &params) {
         return r;

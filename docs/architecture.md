@@ -132,7 +132,7 @@ Project
 └─ next_id
 
 Sequence
-├─ settings: frame rate, size, sample rate, optional tempo (BPM) for the ruler; video edits then snap to 16ths, and a pearl necklace lays one quarter note per clip, repeating the videos across an attached song, with transient density and track energy (loudness plus bass, mids, and treble) choosing how often they cut, …
+├─ settings: frame rate, size, sample rate, optional tempo (BPM) for the ruler; video edits then snap to 16ths, and a pearl necklace lays one quarter note per clip, repeating the videos across an attached song, with transient density and track energy (loudness plus bass, mids, and treble) choosing how often they cut; the clip shuffler deals the shots inside the highlighted video cuts without moving those cuts, …
 ├─ video_tracks / audio_tracks: Vec<Track>
 ├─ markers, mark_in / mark_out
 Track

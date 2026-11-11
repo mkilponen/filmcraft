@@ -93,7 +93,7 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         }
         let held = ui.data(|d| d.get_temp::<egui::Id>(held_id)) == Some(resp.id);
         if resp.clicked() && !held {
-            app.ui.tool = current;
+            crate::panels::shuffle::on_tool_picked(app, current).ok();
         }
         if group.len() > 1 {
             let held_for = resp.is_pointer_button_down_on().then(|| ui.input(|i| i.pointer.press_start_time().map(|s| i.time - s))).flatten();
@@ -123,7 +123,7 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                     // letting go over a row of a flyout this press opened picks that tool
                     let released_on = held && ui.input(|i| i.pointer.primary_released() && i.pointer.interact_pos().is_some_and(|p| row.rect.contains(p)));
                     if row.clicked() || released_on {
-                        app.ui.tool = *tl;
+                        crate::panels::shuffle::on_tool_picked(app, *tl).ok();
                         ui.close();
                     }
                 }

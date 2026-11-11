@@ -14,6 +14,8 @@ pub enum Icon {
     Rolling,
     RateStretch,
     Remix,
+    /// Two clips trading places: the cuts stay, the shots swap.
+    Shuffle,
     Razor,
     Slip,
     Slide,
@@ -285,6 +287,15 @@ pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
             pen.fill(&[(12.5, 2.5), (10.5, 1.0), (10.5, 4.0)]);
             pen.line(&[(12.0, 13.5), (4.0, 13.5)]);
             pen.fill(&[(3.5, 13.5), (5.5, 12.0), (5.5, 14.8)]);
+        }
+        Shuffle => {
+            // Two clips and two opposite arrows. The blocks stay put; the arrows trade sides.
+            pen.rect(2.0, 2.0, 7.0, 5.0);
+            pen.rect(9.0, 11.0, 14.0, 14.0);
+            pen.line(&[(4.0, 8.0), (11.0, 8.0)]);
+            pen.fill(&[(12.0, 8.0), (10.0, 6.5), (10.0, 9.5)]);
+            pen.line(&[(12.0, 9.0), (5.0, 9.0)]);
+            pen.fill(&[(4.0, 9.0), (6.0, 7.5), (6.0, 10.5)]);
         }
         Razor => {
             pen.closed(&[(2.5, 5.0), (13.5, 5.0), (13.5, 11.0), (2.5, 11.0)]);
@@ -836,6 +847,7 @@ mod tests {
         Rolling,
         RateStretch,
         Remix,
+        Shuffle,
         Razor,
         Slip,
         Slide,

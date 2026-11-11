@@ -130,7 +130,11 @@ fn handle_ui_set(app: &mut FilmcraftApp, ctx: &egui::Context, p: &Value) -> Outc
     }
     if let Some(t) = s("tool") {
         match Tool::from_name(t) {
-            Some(t) => app.ui.tool = t,
+            Some(tool) => {
+                if let Err(e) = crate::panels::shuffle::on_tool_picked(app, tool) {
+                    return err(e);
+                }
+            }
             None => return err(format!("unknown tool `{t}`")),
         }
     }

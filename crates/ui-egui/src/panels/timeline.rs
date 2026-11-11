@@ -644,7 +644,8 @@ fn draw_clips(
             let x0 = layout.x_of(start);
             let x1 = layout.x_of(start + dur);
             let body = Rect::from_min_max(pos2(x0, r.rect.min.y + 1.0), pos2(x1.max(x0 + 1.0), r.rect.max.y - 1.0));
-            draw_clip(app, ctx, &p, body, it, r.kind, selection.contains(&it.id), &t, rate);
+            let marked = if app.ui.tool == crate::state::Tool::ClipShuffler { app.ui.shuffle_clips.contains(&it.id.0) } else { selection.contains(&it.id) };
+            draw_clip(app, ctx, &p, body, it, r.kind, marked, &t, rate);
             if volume_line {
                 super::timeline_volume::paint(&p, body, it);
             }

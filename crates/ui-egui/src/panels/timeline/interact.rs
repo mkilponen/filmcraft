@@ -300,6 +300,14 @@ fn hover_cursor(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequence, layou
     let area = Rect::from_min_max(pos2(layout.content.min.x, layout.ruler.min.y), layout.content.max);
     let mods = ctx.input(|i| i.modifiers);
     let tool = app.ui.tool;
+    if tool == Tool::ClipShuffler {
+        if let Some(p) = pos
+            && area.contains(p)
+        {
+            ctx.set_cursor_icon(CursorIcon::PointingHand);
+        }
+        return;
+    }
     let roll_ripple = app.session.prefs.trim.selection_tool_roll_ripple;
     // ---- cursor feedback: what a press here would grab (#259)
     if app.tl.drag.is_none()
@@ -390,10 +398,27 @@ fn press_action(app: &mut FilmcraftApp, ctx: &egui::Context, resp: &egui::Respon
             Grab::Volume { .. } if resp.clicked() && !adding => Grab::Other(pressed.grab.hit()),
             g => g,
         };
+        if clip_shuffler_press(app, resp, grab) {
+            return false;
+        }
         start_drag(app, ctx, resp, seq, layout, grab, p, t, (pressed.v_scroll, pressed.a_scroll));
     }
 
     false
+}
+
+/// A press while the Clip Shuffler is the current tool. A middle-button drag still pans. Anything
+/// else is either a highlight toggle or ignored, so trims and moves cannot start.
+fn clip_shuffler_press(app: &mut FilmcraftApp, resp: &egui::Response, grab: Grab) -> bool {
+    if app.ui.tool != Tool::ClipShuffler || resp.drag_started_by(egui::PointerButton::Middle) {
+        return false;
+    }
+    if resp.clicked()
+        && let Grab::Other(Hit::Clip { clip, .. }) = grab
+    {
+        crate::panels::shuffle::toggle_clip(app, clip);
+    }
+    true
 }
 
 /// What a press does: the drag it starts (or the tool's click action), the playhead jump a

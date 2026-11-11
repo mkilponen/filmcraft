@@ -443,6 +443,56 @@ fn a_pearl_necklace_cuts_loud_sections_faster_than_quiet_ones() {
 }
 
 #[test]
+fn shuffling_clips_keeps_the_cuts_and_deals_the_shots() {
+    let mut s = Session::default();
+    s.execute("file.newSequence", json!({"name": "Shuffle", "fps": 24.0})).unwrap();
+    let mut items = Vec::new();
+    for name in ["A", "B", "C"] {
+        items.push(s.execute("file.newColorMatte", json!({"name": name, "seconds": 5.0})).unwrap()["item"].as_u64().unwrap());
+    }
+    let history = s.history.undo.len();
+    assert!(s.execute("timeline.shuffleClips", json!({"clips": [1]})).is_err(), "one clip is not a shuffle");
+    assert_eq!(s.history.undo.len(), history);
+
+    let mut clips = Vec::new();
+    for (i, (item, frames, source)) in [(items[0], 24, 0), (items[1], 48, 24), (items[2], 24, 48)].into_iter().enumerate() {
+        let at = [0, 24, 72][i];
+        let placed = s
+            .execute(
+                "timeline.place",
+                json!({"item": item, "frame": at, "duration": {"frame": frames}, "sourceIn": {"frame": source}, "video": true, "audio": false}),
+            )
+            .unwrap();
+        clips.push(placed["clips"][0].as_u64().unwrap());
+    }
+    let before: Vec<_> = s.active_sequence().unwrap().video_tracks[0].items.iter().map(|it| (it.start.0, it.duration.0, it.item.0, it.source_in.0)).collect();
+    let history = s.history.undo.len();
+    assert!(s.execute("timeline.shuffleClips", json!({"clips": [clips[0], clips[0]]})).unwrap_err().to_string().contains("once"));
+    assert!(s.execute("timeline.shuffleClips", json!({"clips": [clips[0], 9_999_999]})).unwrap_err().to_string().contains("no clip"));
+    let dir = crate::media_test_util::tmp_dir("clip-shuffle");
+    let path = dir.join("tone.wav");
+    std::fs::write(&path, crate::voiceover::write_wav_f32(&vec![0.0; 4_800], 48_000)).unwrap();
+    let audio = s.execute("file.import", json!({"paths": [path]})).unwrap()["items"][0].as_u64().unwrap();
+    let audio_clip = s.execute("timeline.place", json!({"item": audio, "frame": 0, "video": false, "audio": true})).unwrap()["clips"][0].as_u64().unwrap();
+    assert!(s.execute("timeline.shuffleClips", json!({"clips": [clips[0], audio_clip]})).unwrap_err().to_string().contains("video"));
+    assert_eq!(s.history.undo.len(), history + 2, "a refused shuffle adds no undo step");
+    let seed = (1..40).find(|seed| crate::shuffle::order(3, *seed) != vec![0, 1, 2]).unwrap();
+    let deal = crate::shuffle::order(3, seed);
+    let laid = s.execute("timeline.shuffleClips", json!({"clips": clips, "seed": seed})).unwrap();
+    assert_eq!(laid["changed"], json!(true));
+    let after: Vec<_> = s.active_sequence().unwrap().video_tracks[0].items.iter().map(|it| (it.start.0, it.duration.0, it.item.0, it.source_in.0)).collect();
+    assert_eq!(after.len(), 3);
+    for (i, row) in after.iter().enumerate() {
+        let src = before[deal[i]];
+        assert_eq!((row.0, row.1), (before[i].0, before[i].1), "the cut stays put");
+        assert_eq!((row.2, row.3), (src.2, src.3), "the shot moves with the deal");
+    }
+    assert_eq!(s.undo().as_deref(), Some("Shuffle Clips"));
+    let restored: Vec<_> = s.active_sequence().unwrap().video_tracks[0].items.iter().map(|it| it.item.0).collect();
+    assert_eq!(restored, vec![items[0], items[1], items[2]]);
+}
+
+#[test]
 fn sequence_settings_timecode_render_quality_and_colour() {
     let mut s = demo();
     s.execute("sequence.settings", json!({"fps":29.97,"dropFrame":true,"maxRenderQuality":true})).unwrap();

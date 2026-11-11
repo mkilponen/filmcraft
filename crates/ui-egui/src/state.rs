@@ -16,6 +16,8 @@ pub enum Tool {
     Rolling,
     RateStretch,
     Remix,
+    /// Highlight video clips, then press again to swap their shots without moving the cuts.
+    ClipShuffler,
     Razor,
     Slip,
     Slide,
@@ -29,7 +31,7 @@ pub enum Tool {
 }
 
 impl Tool {
-    pub const ALL: [Tool; 17] = [
+    pub const ALL: [Tool; 18] = [
         Tool::Selection,
         Tool::TrackSelectForward,
         Tool::TrackSelectBackward,
@@ -37,6 +39,7 @@ impl Tool {
         Tool::Rolling,
         Tool::RateStretch,
         Tool::Remix,
+        Tool::ClipShuffler,
         Tool::Razor,
         Tool::Slip,
         Tool::Slide,
@@ -57,6 +60,7 @@ impl Tool {
             Tool::Rolling => "Rolling Edit Tool",
             Tool::RateStretch => "Rate Stretch Tool",
             Tool::Remix => "Remix Tool",
+            Tool::ClipShuffler => "Clip Shuffler",
             Tool::Razor => "Razor Tool",
             Tool::Slip => "Slip Tool",
             Tool::Slide => "Slide Tool",
@@ -79,6 +83,7 @@ impl Tool {
             Tool::Rolling => "tool.rolling",
             Tool::RateStretch => "tool.rateStretch",
             Tool::Remix => "tool.remix",
+            Tool::ClipShuffler => "tool.clipShuffler",
             Tool::Razor => "tool.razor",
             Tool::Slip => "tool.slip",
             Tool::Slide => "tool.slide",
@@ -99,6 +104,7 @@ impl Tool {
             Tool::Rolling => Icon::Rolling,
             Tool::RateStretch => Icon::RateStretch,
             Tool::Remix => Icon::Remix,
+            Tool::ClipShuffler => Icon::Shuffle,
             Tool::Razor => Icon::Razor,
             Tool::Slip => Icon::Slip,
             Tool::Slide => Icon::Slide,
@@ -124,6 +130,7 @@ impl Tool {
             vec![Tool::TrackSelectForward, Tool::TrackSelectBackward],
             vec![Tool::Ripple, Tool::Rolling, Tool::RateStretch, Tool::Remix],
             vec![Tool::Razor],
+            vec![Tool::ClipShuffler],
             vec![Tool::Slip, Tool::Slide],
             vec![Tool::Pen, Tool::Rectangle, Tool::Ellipse],
             vec![Tool::Hand, Tool::Zoom],
@@ -452,6 +459,9 @@ pub struct UiState {
     #[serde(default)]
     pub language: crate::i18n::Language,
     pub tool: Tool,
+    /// Video clips highlighted by the Clip Shuffler. Empty outside that tool.
+    #[serde(default)]
+    pub shuffle_clips: Vec<u64>,
     pub mode: Mode,
     pub workspace: String,
     /// The panel arrangement in use: craft-ui's frame tree and floating windows.
@@ -1013,6 +1023,7 @@ impl Default for UiState {
             custom_label_color: None,
             language: crate::i18n::Language::default(),
             tool: Tool::Selection,
+            shuffle_clips: Vec::new(),
             mode: Mode::Edit,
             workspace: "Editing".into(),
             closed_floating: vec![],

@@ -45,6 +45,7 @@ pub mod scopes;
 pub mod sequence_settings;
 pub mod settings;
 pub mod shortcuts_dialog;
+pub mod shuffle;
 pub mod tempo;
 pub mod text;
 pub mod timecode;
